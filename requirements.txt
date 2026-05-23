@@ -1,0 +1,26 @@
+# Core dependencies
+faster-whisper>=0.10.0        # Optimized Whisper inference
+ollama>=0.1.0                 # Ollama Python client
+piper-tts>=1.2.0              # Piper TTS
+# pyaudio>=0.2.13             # Audio recording/playback - REMOVED (sounddevice is better on Windows)
+numpy>=1.24.0                 # Audio processing
+sounddevice>=0.4.6            # Audio I/O (replaces pyaudio)
+scipy>=1.10.0                 # Audio signal processing
+
+# Voice Activity Detection (optional - uses simple VAD fallback on Python 3.14+)
+# webrtcvad>=2.0.10           # Uncomment if using Python < 3.14
+
+# Web interface (optional)
+fastapi>=0.104.0
+uvicorn>=0.24.0
+websockets>=12.0
+
+# GUI interface (optional)
+gradio>=4.0.0                 # Quick web-based GUI
+
+# Utilities
+python-dotenv>=1.0.0          # Environment variables
+pydantic>=2.0.0               # Data validation
+pydantic-settings>=2.0.0      # Settings management
+pyyaml>=6.0                   # Config file parsing
+rich>=13.0.0                  # Terminal formatting
