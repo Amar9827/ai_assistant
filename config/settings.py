@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     MODELS_DIR: Path = PROJECT_ROOT / "models"
 
     # Whisper settings
-    WHISPER_MODEL: str = "base"  # tiny, base, small, medium, large
+    WHISPER_MODEL: str = "small"  # tiny, base, small, medium, large
     WHISPER_DEVICE: str = "auto"  # auto, cpu, cuda
     WHISPER_COMPUTE_TYPE: str = "int8"  # int8, float16, float32
 

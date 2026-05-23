@@ -22,7 +22,7 @@ setup(
         "fastapi>=0.104.0",
         "uvicorn>=0.24.0",
         "websockets>=12.0",
-        "gradio>=4.0.0",
+        # gradio removed - using custom UI
         "python-dotenv>=1.0.0",
         "pydantic>=2.0.0",
         "pydantic-settings>=2.0.0",
@@ -32,8 +32,7 @@ setup(
     entry_points={
         "console_scripts": [
             "assistant-cli=src.interfaces.cli:main",
-            "assistant-web=src.interfaces.web:main",
-            "assistant-gui=src.interfaces.gui:main",
+            # Web UI will be added back with new real-time interface
         ],
     },
     classifiers=[
