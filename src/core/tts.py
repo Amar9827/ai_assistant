@@ -41,8 +41,11 @@ class TextToSpeech:
             cmd = [
                 sys.executable, "-m", "piper",
                 "--model", relative_model,
-                "--output_file", tmp_path
+                "--output_file", tmp_path,
+                "--speaker", str(self.settings.PIPER_SPEAKER)
             ]
+
+            print(f"[TTS DEBUG] Command: {' '.join(cmd)}")
 
             process = subprocess.Popen(
                 cmd,

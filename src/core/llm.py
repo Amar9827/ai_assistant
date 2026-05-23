@@ -62,28 +62,21 @@ class LLMProcessor:
 
     def _stream_response(self, response: Generator):
         """
-        Stream response chunks and yield complete sentences
+        Stream response chunks - yields each token as it arrives
 
-        Yields text when sentence boundaries are detected (. ! ?)
+        For WebSocket streaming, we yield raw chunks immediately.
+        For sentence-based streaming (TTS), use generate_streaming_sentences()
         """
         full_response = ""
-        current_sentence = ""
 
         for chunk in response:
             content = chunk['message']['content']
             full_response += content
-            current_sentence += content
 
-            # Check for sentence boundaries
-            if any(punct in content for punct in ['. ', '! ', '? ', '\n']):
-                # Yield complete sentence
-                yield current_sentence
-                current_sentence = ""
+            # Yield each chunk immediately (word-by-word streaming)
+            yield content
 
-        # Yield any remaining text
-        if current_sentence.strip():
-            yield current_sentence
-
+        # Save complete response to conversation history
         self.conversation_history.append({
             "role": "assistant",
             "content": full_response
