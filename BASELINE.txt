@@ -136,13 +136,28 @@ POST-PHASE-2 MEASUREMENTS
 ================================================================================
 
 TTS-per-sentence latency (in-process Piper):
-- Measured: 0.067 seconds
+- Measured: 0.070 seconds (cold/warm consistent across 3 calls)
 - Baseline: 1.794 seconds (subprocess)
-- Improvement: 26.8× faster (1794ms → 67ms)
+- Improvement: 25.6× faster (1794ms → 70ms)
 - Target: ≤0.359s (5× improvement)
-- Status: ✓ EXCEEDED TARGET (26.8× > 5×)
+- Status: ✓ EXCEEDED TARGET (25.6× > 5×)
 
 Test sentence: "Hello, how are you today?" (same as baseline)
 Method: In-process PiperVoice with SynthesisConfig(speaker_id=17)
 Speaker: 17 (p238, female, smooth & conversational) - PRESERVED
 Sample rate: 22050 Hz
+
+Phase 2 Results Summary:
+- Cold start performance: 0.069s
+- Warm call #2: 0.070s
+- Warm call #3: 0.070s
+- No warmup effect observed (consistent performance)
+- Manual ear-check: PASSED (user confirmed faster response, correct voice)
+- Real-world usage: User reports noticeably faster text and voice agents
+
+Observation - First-audio WebSocket test:
+- Measured: 5.01s end-to-end (text query → first audio chunk)
+- Expected: ~1.4s (TTS now 0.07s, Whisper ~0.5s, LLM ~0.7s)
+- Analysis: 5s reading likely Ollama cold start in fresh process
+- Not reproducible in normal use (user reports fast real-world latency)
+- Status: Flagged for Stage 2 investigation (continuous-use profiling)
