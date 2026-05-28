@@ -1,0 +1,132 @@
+================================================================================
+AI Assistant v2.0 - Pre-Flight Baseline (Stage 1)
+================================================================================
+Date: 2026-05-28
+Purpose: Baseline measurements before Stage 1 critical fixes
+
+================================================================================
+PRE-FLIGHT CHECKLIST RESULTS
+================================================================================
+
+1. BASELINE MEASUREMENT
+   ✓ Time-to-first-audio (end-to-end): 3.16 seconds
+   ✓ TTS-per-sentence latency (isolated): 1.794 seconds
+   ✓ Test query: "What is the capital of France?"
+   ✓ Test sentence (TTS): "Hello, how are you today?"
+   ✓ Method: WebSocket text query → first audio chunk
+
+2. CONFIGURATION DRIFT RESOLUTION
+   ✓ Issue found: config/settings.py hardcoded "en_US-lessac-medium" (not on disk)
+   ✓ Resolution: Updated to "en_GB-vctk-medium" (Path A)
+   ✓ Verification: .env was already reading correctly; fix was cosmetic
+   ✓ Voice configured (post-fix): en_GB-vctk-medium
+   ✓ Speaker configured: 17 (p238, female, smooth & conversational)
+
+3. PIPER-TTS VERSION
+   ✓ Version: 1.4.2
+   ✓ Location: C:\github\Files\generated_ddls\ai-assistant\venv\Lib\site-packages
+   ✓ Status: >= 1.3.0 (Phase 2 migration straightforward, no breaking changes)
+
+4. PYTHON VERSION
+   ✓ Version: 3.14.0
+   ✓ Status: Exceeds minimum requirement (3.10+)
+
+5. PIPER VOICE FILES VERIFICATION
+   ✓ Voice model: models/piper/en_GB-vctk-medium.onnx (74MB)
+   ✓ Config file: models/piper/en_GB-vctk-medium.onnx.json (6.5KB)
+   ✓ Additional voice available: en_GB-semaine-medium (also complete)
+
+================================================================================
+SYSTEM CONFIGURATION
+================================================================================
+
+Python Environment:
+- Python: 3.14.0
+- Virtual env: venv/ (Windows-style)
+- piper-tts: 1.4.2
+
+Piper TTS:
+- Voice: en_GB-vctk-medium (109 speakers, multi-speaker model)
+- Speaker: 17 (p238)
+- Model path: models/piper/en_GB-vctk-medium.onnx
+- Sample rate: 22050 Hz (per Piper voice config)
+
+LLM:
+- Model: llama3.2:3b
+- Host: http://localhost:11434
+- Temperature: 0.7
+
+Whisper STT:
+- Model: small
+- Device: auto
+- Compute: int8
+
+================================================================================
+CURRENT ARCHITECTURE (PRE-STAGE-1)
+================================================================================
+
+TTS Implementation:
+- Method: Subprocess calls to Piper CLI (python -m piper)
+- Overhead: Process spawn + ONNX model load per sentence
+- Temp files: WAV files written to disk, read back
+- Concurrency: Sentence-by-sentence with asyncio.gather()
+
+LLM History:
+- Issue: Non-atomic commits (user turn added before streaming)
+- Risk: Orphaned user turns on disconnect/cancellation
+- Impact: Conversation history corruption
+
+TTS Cancellation:
+- Current: Not implemented
+- Impact: Cannot interrupt assistant mid-response
+
+Security:
+- CORS: Open to all origins (allow_origins=["*"])
+- Audio size cap: Not implemented
+- Temp file cleanup: Manual, may leak on errors
+
+================================================================================
+STAGE 1 ACCEPTANCE CRITERIA
+================================================================================
+
+After Stage 1 completion, verify:
+
+1. TTS-per-sentence latency: >= 5× faster (PRIMARY METRIC Phase 2 controls)
+   - Baseline: 1.794s (subprocess Piper)
+   - Target: <= 0.359s (in-process Piper)
+   - Test: synthesize("Hello, how are you today?") wall-clock time
+   - Rationale: End-to-end includes Whisper+LLM (not fixed by Phase 2)
+
+2. Time-to-first-audio: Expected improvement ~1.5s (subprocess overhead removed)
+   - Baseline: 3.16s (end-to-end)
+   - Expected: ~1.5-2.0s (TTS overhead eliminated, LLM/Whisper unchanged)
+   - Method: WebSocket text query → first audio chunk
+
+3. LLM history integrity: No orphaned turns on disconnect
+   - Test: Cancel mid-stream, verify history is atomic
+
+4. TTS cancellation: Can interrupt assistant within 50ms
+   - Test: Call turn.cancel() during audio generation
+
+5. Security: CORS restricted, audio capped, temp files cleaned
+   - Test: Check CORS headers, upload large file, verify cleanup
+
+6. Wake word integration: Still functional after changes
+   - Test: POST /wake-word/trigger with connected websocket → fires wake_word_detected
+
+7. No regressions:
+   - Frontend wire format unchanged
+   - Multi-turn conversations preserved
+   - PIPER_SPEAKER setting respected (speaker 17)
+
+================================================================================
+NOTES
+================================================================================
+
+- Backend startup successful with Piper initialized
+- Ollama connection verified
+- Whisper model loaded (small)
+- Wake word service not tested (pre-flight focuses on core pipeline)
+- .env file properly loaded by pydantic_settings
+
+Pre-flight status: ✓ PASSED - Ready for Phase 0

@@ -24,3 +24,7 @@ pydantic>=2.0.0               # Data validation
 pydantic-settings>=2.0.0      # Settings management
 pyyaml>=6.0                   # Config file parsing
 rich>=13.0.0                  # Terminal formatting
+
+# Testing
+pytest>=8.0
+pytest-asyncio>=0.23

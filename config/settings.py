@@ -18,8 +18,8 @@ class Settings(BaseSettings):
     OLLAMA_TEMPERATURE: float = 0.7
 
     # Piper TTS settings
-    PIPER_VOICE: str = "en_US-lessac-medium"
-    PIPER_SPEAKER: int = 0
+    PIPER_VOICE: str = "en_GB-vctk-medium"
+    PIPER_SPEAKER: int = 17
 
     @property
     def PIPER_MODEL_PATH(self) -> Path:
