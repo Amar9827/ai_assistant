@@ -81,21 +81,22 @@ app = FastAPI(title="AI Voice Assistant", version="2.0")
 active_websockets = set()
 wake_word_enabled = True
 
-# CORS middleware - allows frontend (localhost:5173) to connect
-# Explanation: Without CORS, browsers block cross-origin requests
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, change to ["http://localhost:5173"]
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # Initialize AI components
 settings = Settings()
 llm = LLMProcessor(settings)
 stt = SpeechToText(settings)
 tts = TextToSpeech(settings)
+
+# CORS middleware - allows frontend (localhost:5173) to connect
+# Explanation: Without CORS, browsers block cross-origin requests
+cors_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",")]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize LLM on startup (using modern lifespan pattern)
 from contextlib import asynccontextmanager
@@ -295,11 +296,12 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
     Handle audio data from frontend - transcribe and process
 
     Flow:
-    1. Decode base64 audio
-    2. Save to temporary file
-    3. Transcribe with Whisper
-    4. Process with LLM
-    5. Delete temporary file
+    1. Validate format and size
+    2. Decode base64 audio
+    3. Save to temporary file
+    4. Transcribe with Whisper
+    5. Process with LLM
+    6. Delete temporary file
 
     Explanation:
     - Frontend sends audio as base64 string (WebSocket can't send binary directly in JSON)
@@ -307,6 +309,9 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
     - Whisper transcribes the audio file
     - Then we process it like a text query
     """
+
+    ALLOWED_FORMATS = {"webm", "wav", "ogg", "mp3"}
+    tmp_path = None
 
     try:
         # Status: Processing (transcribing audio)
@@ -317,31 +322,45 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
 
         print("[<-] Received audio data")
 
-        # Step 1: Decode base64 audio
-        audio_base64 = data.get("audio", "")
+        # Step 1: Validate format
         audio_format = data.get("format", "webm")
+        if audio_format not in ALLOWED_FORMATS:
+            print(f"[ERROR] Invalid audio format: {audio_format}")
+            await websocket.send_json({
+                "type": "status",
+                "status": "error"
+            })
+            return
 
+        # Step 2: Validate size
+        audio_base64 = data.get("audio", "")
         if not audio_base64:
             print("[ERROR] No audio data received")
             return
 
+        max_bytes = int(settings.MAX_AUDIO_MB) * 1024 * 1024
+        if len(audio_base64) * 0.75 > max_bytes:
+            print(f"[ERROR] Audio exceeds {settings.MAX_AUDIO_MB}MB limit")
+            await websocket.send_json({
+                "type": "status",
+                "status": "error"
+            })
+            return
+
+        # Step 3: Decode base64 audio
         audio_bytes = base64.b64decode(audio_base64)
         print(f"[AUDIO] Decoded {len(audio_bytes)} bytes")
 
-        # Step 2: Save to temporary file
+        # Step 4: Save to temporary file
         # Explanation: Whisper expects a file path, not raw bytes
         with tempfile.NamedTemporaryFile(suffix=f".{audio_format}", delete=False) as temp_audio:
             temp_audio.write(audio_bytes)
-            temp_audio_path = temp_audio.name
-            print(f"[AUDIO] Saved to {temp_audio_path}")
+            tmp_path = temp_audio.name
+            print(f"[AUDIO] Saved to {tmp_path}")
 
-        # Step 3: Transcribe with Whisper
+        # Step 5: Transcribe with Whisper
         print("[STT] Transcribing audio...")
-        user_text = await asyncio.to_thread(stt.transcribe_file, temp_audio_path)
-
-        # Clean up temporary file
-        Path(temp_audio_path).unlink()
-        print(f"[AUDIO] Deleted {temp_audio_path}")
+        user_text = await asyncio.to_thread(stt.transcribe_file, tmp_path)
 
         if not user_text or user_text.strip() == "":
             print("[STT] No speech detected in audio")
@@ -353,14 +372,14 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
 
         print(f"[STT] Transcribed: {user_text}")
 
-        # Step 4: Send transcribed text to frontend IMMEDIATELY
+        # Step 6: Send transcribed text to frontend IMMEDIATELY
         # Explanation: Frontend needs to show user's message before assistant responds
         await websocket.send_json({
             "type": "user_transcript",
             "text": user_text
         })
 
-        # Step 5: Process transcribed text with LLM
+        # Step 7: Process transcribed text with LLM
         await handle_voice_query(websocket, user_text)
 
     except Exception as e:
@@ -372,6 +391,11 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
             "type": "status",
             "status": "error"
         })
+    finally:
+        # Clean up temporary file
+        if tmp_path is not None:
+            Path(tmp_path).unlink(missing_ok=True)
+            print(f"[AUDIO] Deleted {tmp_path}")
 
 
 async def handle_voice_query(websocket: WebSocket, user_text: str):

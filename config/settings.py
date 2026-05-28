@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     CHANNELS: int = 1
     AUDIO_FORMAT: str = "int16"
 
+    # Security settings
+    CORS_ORIGINS: str = "http://localhost:5173"
+    MAX_AUDIO_MB: str = "10"
+
     class Config:
         env_file = ".env"
         case_sensitive = True
