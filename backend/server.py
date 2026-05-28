@@ -31,6 +31,13 @@ from config.settings import Settings
 # Initialize FastAPI app
 app = FastAPI(title="AI Voice Assistant", version="2.0")
 
+# ============================================================
+# Wake Word Integration
+# ============================================================
+# Track connected WebSocket clients for wake word broadcasting
+active_websockets = set()
+wake_word_enabled = True
+
 # CORS middleware - allows frontend (localhost:5173) to connect
 # Explanation: Without CORS, browsers block cross-origin requests
 app.add_middleware(
@@ -88,7 +95,49 @@ async def root():
     return {
         "status": "running",
         "version": "2.0",
-        "websocket": "ws://localhost:8000/ws"
+        "websocket": "ws://localhost:8000/ws",
+        "wake_word": "enabled" if wake_word_enabled else "disabled"
+    }
+
+
+@app.post("/wake-word/trigger")
+async def wake_word_trigger():
+    """
+    Wake word detection trigger endpoint
+    Called by external wake word service when 'Hey Jarvis' is detected
+    Broadcasts to all connected WebSocket clients to start listening
+    """
+    print("[WAKE WORD] Trigger received - broadcasting to clients...")
+
+    # Broadcast wake word event to all connected clients
+    disconnected = set()
+    for ws in active_websockets:
+        try:
+            await ws.send_json({
+                "type": "wake_word_detected",
+                "wake_word": "Hey Jarvis"
+            })
+            print(f"[WAKE WORD] Notified client")
+        except Exception as e:
+            print(f"[WAKE WORD] Failed to notify client: {e}")
+            disconnected.add(ws)
+
+    # Remove disconnected clients
+    active_websockets.difference_update(disconnected)
+
+    return {
+        "status": "triggered",
+        "clients_notified": len(active_websockets) - len(disconnected)
+    }
+
+
+@app.get("/wake-word/status")
+async def wake_word_status():
+    """Check wake word integration status"""
+    return {
+        "enabled": wake_word_enabled,
+        "connected_clients": len(active_websockets),
+        "endpoint": "POST /wake-word/trigger"
     }
 
 
@@ -112,6 +161,10 @@ async def websocket_endpoint(websocket: WebSocket):
     # Accept the WebSocket connection
     await websocket.accept()
     print("[WS] Frontend connected")
+
+    # Add to active websockets for wake word broadcasting
+    active_websockets.add(websocket)
+    print(f"[WS] Active connections: {len(active_websockets)}")
 
     try:
         # Send initial "connected" status
@@ -162,6 +215,10 @@ async def websocket_endpoint(websocket: WebSocket):
             })
         except:
             pass
+    finally:
+        # Remove from active websockets
+        active_websockets.discard(websocket)
+        print(f"[WS] Active connections: {len(active_websockets)}")
 
 
 async def generate_and_stream_audio(websocket: WebSocket, text: str):

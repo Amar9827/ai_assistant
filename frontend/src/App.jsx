@@ -38,9 +38,16 @@ export default function App() {
       try {
         const data = JSON.parse(event.data);
 
+        // DEBUG: Log all incoming messages
+        console.log('[WebSocket] Received:', data.type, data);
+
         // Handle different message types from backend
         if (data.type === 'status') {
           setStatus(data.status); // 'listening' | 'processing' | 'speaking'
+        } else if (data.type === 'wake_word_detected') {
+          // Wake word "Hey Jarvis" was detected!
+          console.log('🎤 Wake word detected:', data.wake_word);
+          handleWakeWordDetected();
         } else if (data.type === 'user_transcript') {
           // User's transcribed speech - add to chat immediately
           // Explanation: Show what user said BEFORE assistant responds
@@ -154,6 +161,49 @@ export default function App() {
 
     } catch (error) {
       console.error('[AUDIO] Error playing audio chunk:', error);
+    }
+  };
+
+  const handleWakeWordDetected = () => {
+    /**
+     * Handle wake word detection - auto-start recording
+     *
+     * Called when backend receives "Hey Jarvis" from wake word service
+     * Automatically starts recording without user clicking the button
+     */
+    console.log('[WAKE WORD] Auto-starting recording...');
+
+    // Visual feedback - flash the screen or show indicator
+    // Add a CSS class to trigger animation
+    document.body.classList.add('wake-word-active');
+    setTimeout(() => {
+      document.body.classList.remove('wake-word-active');
+    }, 800);
+
+    // Show alert temporarily for obvious feedback
+    const alertDiv = document.createElement('div');
+    alertDiv.style.position = 'fixed';
+    alertDiv.style.top = '50%';
+    alertDiv.style.left = '50%';
+    alertDiv.style.transform = 'translate(-50%, -50%)';
+    alertDiv.style.backgroundColor = '#06b6d4';
+    alertDiv.style.color = '#000';
+    alertDiv.style.padding = '30px 60px';
+    alertDiv.style.fontSize = '32px';
+    alertDiv.style.fontWeight = 'bold';
+    alertDiv.style.borderRadius = '20px';
+    alertDiv.style.boxShadow = '0 0 50px rgba(6, 182, 212, 1)';
+    alertDiv.style.zIndex = '9999';
+    alertDiv.textContent = '🎤 Wake Word Detected!';
+    document.body.appendChild(alertDiv);
+
+    setTimeout(() => {
+      alertDiv.remove();
+    }, 1000);
+
+    // Auto-start recording if not already listening
+    if (!isListening && status === 'connected') {
+      startListening();
     }
   };
 
