@@ -15,7 +15,7 @@ setup(
     install_requires=[
         "faster-whisper>=0.10.0",
         "ollama>=0.1.0",
-        "piper-tts>=1.2.0",
+        "piper-tts>=1.3.0,<2.0",
         "numpy>=1.24.0",
         "sounddevice>=0.4.6",
         "scipy>=1.10.0",

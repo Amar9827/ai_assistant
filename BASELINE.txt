@@ -130,3 +130,19 @@ NOTES
 - .env file properly loaded by pydantic_settings
 
 Pre-flight status: ✓ PASSED - Ready for Phase 0
+
+================================================================================
+POST-PHASE-2 MEASUREMENTS
+================================================================================
+
+TTS-per-sentence latency (in-process Piper):
+- Measured: 0.067 seconds
+- Baseline: 1.794 seconds (subprocess)
+- Improvement: 26.8× faster (1794ms → 67ms)
+- Target: ≤0.359s (5× improvement)
+- Status: ✓ EXCEEDED TARGET (26.8× > 5×)
+
+Test sentence: "Hello, how are you today?" (same as baseline)
+Method: In-process PiperVoice with SynthesisConfig(speaker_id=17)
+Speaker: 17 (p238, female, smooth & conversational) - PRESERVED
+Sample rate: 22050 Hz
