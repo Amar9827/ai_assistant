@@ -19,6 +19,9 @@ import sys
 import base64
 import tempfile
 from pathlib import Path
+import uuid
+from dataclasses import dataclass, field
+from typing import Set
 
 # Add parent directory to path to import from src/
 sys.path.append(str(Path(__file__).parent.parent))
@@ -27,6 +30,46 @@ from src.core.llm import LLMProcessor
 from src.core.stt import SpeechToText
 from src.core.tts import TextToSpeech
 from config.settings import Settings
+
+# ============================================================
+# Turn: Cancellable Task Primitive (Stage 2 prerequisite)
+# ============================================================
+
+@dataclass
+class Turn:
+    """One user→assistant exchange. Owns all in-flight tasks for that exchange.
+
+    Stage 1: we create a Turn per query but never call cancel() on it.
+    Stage 2: barge-in detection will call turn.cancel() the instant the user
+    starts speaking, stopping pending TTS within ~50ms.
+    """
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    tasks: Set[asyncio.Task] = field(default_factory=set)
+    _cancelled: bool = False
+
+    def spawn(self, coro) -> asyncio.Task:
+        """Run coro as a tracked task on this turn."""
+        task = asyncio.create_task(coro)
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        return task
+
+    def cancel(self):
+        """Cancel all in-flight tasks for this turn."""
+        self._cancelled = True
+        for t in list(self.tasks):
+            if not t.done():
+                t.cancel()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled
+
+    async def wait_all(self):
+        """Wait for all tracked tasks to complete (or be cancelled)."""
+        if not self.tasks:
+            return
+        await asyncio.gather(*self.tasks, return_exceptions=True)
 
 # Initialize FastAPI app
 app = FastAPI(title="AI Voice Assistant", version="2.0")
@@ -38,21 +81,56 @@ app = FastAPI(title="AI Voice Assistant", version="2.0")
 active_websockets = set()
 wake_word_enabled = True
 
-# CORS middleware - allows frontend (localhost:5173) to connect
-# Explanation: Without CORS, browsers block cross-origin requests
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, change to ["http://localhost:5173"]
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ============================================================
+# Idle Auto-Shutdown (2 minutes)
+# ============================================================
+import time as _time
+import os as _os
+import signal as _signal
+
+IDLE_TIMEOUT_SECONDS = 120  # 2 minutes
+_last_activity_time = _time.time()
+_idle_shutdown_task: asyncio.Task | None = None
+
+
+def _touch_activity():
+    """Reset the idle timer."""
+    global _last_activity_time
+    _last_activity_time = _time.time()
+
+
+async def _idle_shutdown_watcher():
+    """Background task: shuts down the server after IDLE_TIMEOUT_SECONDS of no activity."""
+    while True:
+        await asyncio.sleep(10)  # check every 10s
+        idle_seconds = _time.time() - _last_activity_time
+        if idle_seconds >= IDLE_TIMEOUT_SECONDS:
+            print(f"[IDLE] No activity for {int(idle_seconds)}s — shutting down")
+            # Close all WebSocket connections gracefully
+            for ws in list(active_websockets):
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+            await asyncio.sleep(0.5)
+            _os._exit(0)
 
 # Initialize AI components
 settings = Settings()
 llm = LLMProcessor(settings)
 stt = SpeechToText(settings)
 tts = TextToSpeech(settings)
+
+# CORS middleware - allows frontend (localhost:5173) to connect
+# Explanation: Without CORS, browsers block cross-origin requests
+cors_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",")]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize LLM on startup (using modern lifespan pattern)
 from contextlib import asynccontextmanager
@@ -80,9 +158,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[WARN] Could not initialize Piper: {e}")
 
+    # Start idle shutdown watcher
+    global _idle_shutdown_task
+    _idle_shutdown_task = asyncio.create_task(_idle_shutdown_watcher())
+    print(f"[OK] Idle auto-shutdown enabled ({IDLE_TIMEOUT_SECONDS}s)")
+
     yield
 
     # Shutdown (cleanup if needed)
+    if _idle_shutdown_task:
+        _idle_shutdown_task.cancel()
     print("[INFO] Server shutting down")
 
 # Apply lifespan to app
@@ -107,6 +192,7 @@ async def wake_word_trigger():
     Called by external wake word service when 'Hey Jarvis' is detected
     Broadcasts to all connected WebSocket clients to start listening
     """
+    _touch_activity()
     print("[WAKE WORD] Trigger received - broadcasting to clients...")
 
     # Broadcast wake word event to all connected clients
@@ -164,6 +250,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     # Add to active websockets for wake word broadcasting
     active_websockets.add(websocket)
+    _touch_activity()
     print(f"[WS] Active connections: {len(active_websockets)}")
 
     try:
@@ -189,10 +276,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif data["type"] == "audio_data":
                 # Receive audio from frontend and transcribe
+                _touch_activity()
                 await handle_audio_data(websocket, data)
 
             elif data["type"] == "text_query":
                 # Handle text-only query (useful for testing)
+                _touch_activity()
                 user_text = data.get("text", "")
                 if user_text:
                     await handle_voice_query(websocket, user_text)
@@ -221,46 +310,30 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"[WS] Active connections: {len(active_websockets)}")
 
 
-async def generate_and_stream_audio(websocket: WebSocket, text: str):
-    """
-    Generate TTS audio for a sentence and stream it immediately
-
-    Explanation:
-    - This function is called for EACH sentence as it arrives
-    - Audio generation happens in parallel with text streaming
-    - No waiting for complete response before starting audio!
-
-    Performance:
-    - OLD: Wait 5s for all text → 2s TTS → play (7s total)
-    - NEW: 1s for first sentence → 0.5s TTS → play (1.5s total!)
-    """
-
+async def generate_and_stream_audio(websocket: WebSocket, text: str, turn: "Turn"):
+    """Generate TTS for one sentence and stream chunks. Cancellable."""
     try:
-        # Generate audio for this sentence (in thread pool to avoid blocking)
         audio_array = await asyncio.to_thread(tts.synthesize, text)
+        print(f"[TTS turn={turn.id}] Generated {len(audio_array)} samples")
 
-        print(f"[TTS] Generated {len(audio_array)} samples for: \"{text[:50]}...\"")
-
-        # Stream audio chunks immediately
-        CHUNK_SIZE = 8192  # samples per chunk (~0.37 seconds at 22050 Hz)
-
+        CHUNK_SIZE = 8192
         for i in range(0, len(audio_array), CHUNK_SIZE):
+            if turn.cancelled:
+                return
             chunk = audio_array[i:i + CHUNK_SIZE]
-            chunk_bytes = chunk.tobytes()
-            chunk_base64 = base64.b64encode(chunk_bytes).decode()
-
+            chunk_base64 = base64.b64encode(chunk.tobytes()).decode()
             await websocket.send_json({
                 "type": "audio_chunk",
                 "audio": chunk_base64,
                 "sample_rate": tts.last_sample_rate,
-                "dtype": "int16"
+                "dtype": "int16",
             })
-
-            # Smaller delay for faster streaming
-            await asyncio.sleep(0.02)  # 20ms between chunks
-
+            await asyncio.sleep(0.02)
+    except asyncio.CancelledError:
+        print(f"[TTS turn={turn.id}] Cancelled mid-stream")
+        raise
     except Exception as e:
-        print(f"[TTS ERROR] Failed to generate audio: {e}")
+        print(f"[TTS ERROR turn={turn.id}] {e}")
 
 
 async def handle_audio_data(websocket: WebSocket, data: dict):
@@ -268,11 +341,12 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
     Handle audio data from frontend - transcribe and process
 
     Flow:
-    1. Decode base64 audio
-    2. Save to temporary file
-    3. Transcribe with Whisper
-    4. Process with LLM
-    5. Delete temporary file
+    1. Validate format and size
+    2. Decode base64 audio
+    3. Save to temporary file
+    4. Transcribe with Whisper
+    5. Process with LLM
+    6. Delete temporary file
 
     Explanation:
     - Frontend sends audio as base64 string (WebSocket can't send binary directly in JSON)
@@ -280,6 +354,9 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
     - Whisper transcribes the audio file
     - Then we process it like a text query
     """
+
+    ALLOWED_FORMATS = {"webm", "wav", "ogg", "mp3"}
+    tmp_path = None
 
     try:
         # Status: Processing (transcribing audio)
@@ -290,31 +367,45 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
 
         print("[<-] Received audio data")
 
-        # Step 1: Decode base64 audio
-        audio_base64 = data.get("audio", "")
+        # Step 1: Validate format
         audio_format = data.get("format", "webm")
+        if audio_format not in ALLOWED_FORMATS:
+            print(f"[ERROR] Invalid audio format: {audio_format}")
+            await websocket.send_json({
+                "type": "status",
+                "status": "error"
+            })
+            return
 
+        # Step 2: Validate size
+        audio_base64 = data.get("audio", "")
         if not audio_base64:
             print("[ERROR] No audio data received")
             return
 
+        max_bytes = int(settings.MAX_AUDIO_MB) * 1024 * 1024
+        if len(audio_base64) * 0.75 > max_bytes:
+            print(f"[ERROR] Audio exceeds {settings.MAX_AUDIO_MB}MB limit")
+            await websocket.send_json({
+                "type": "status",
+                "status": "error"
+            })
+            return
+
+        # Step 3: Decode base64 audio
         audio_bytes = base64.b64decode(audio_base64)
         print(f"[AUDIO] Decoded {len(audio_bytes)} bytes")
 
-        # Step 2: Save to temporary file
+        # Step 4: Save to temporary file
         # Explanation: Whisper expects a file path, not raw bytes
         with tempfile.NamedTemporaryFile(suffix=f".{audio_format}", delete=False) as temp_audio:
             temp_audio.write(audio_bytes)
-            temp_audio_path = temp_audio.name
-            print(f"[AUDIO] Saved to {temp_audio_path}")
+            tmp_path = temp_audio.name
+            print(f"[AUDIO] Saved to {tmp_path}")
 
-        # Step 3: Transcribe with Whisper
+        # Step 5: Transcribe with Whisper
         print("[STT] Transcribing audio...")
-        user_text = await asyncio.to_thread(stt.transcribe_file, temp_audio_path)
-
-        # Clean up temporary file
-        Path(temp_audio_path).unlink()
-        print(f"[AUDIO] Deleted {temp_audio_path}")
+        user_text = await asyncio.to_thread(stt.transcribe_file, tmp_path)
 
         if not user_text or user_text.strip() == "":
             print("[STT] No speech detected in audio")
@@ -326,14 +417,14 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
 
         print(f"[STT] Transcribed: {user_text}")
 
-        # Step 4: Send transcribed text to frontend IMMEDIATELY
+        # Step 6: Send transcribed text to frontend IMMEDIATELY
         # Explanation: Frontend needs to show user's message before assistant responds
         await websocket.send_json({
             "type": "user_transcript",
             "text": user_text
         })
 
-        # Step 5: Process transcribed text with LLM
+        # Step 7: Process transcribed text with LLM
         await handle_voice_query(websocket, user_text)
 
     except Exception as e:
@@ -345,105 +436,84 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
             "type": "status",
             "status": "error"
         })
+    finally:
+        # Clean up temporary file
+        if tmp_path is not None:
+            Path(tmp_path).unlink(missing_ok=True)
+            print(f"[AUDIO] Deleted {tmp_path}")
 
 
 async def handle_voice_query(websocket: WebSocket, user_text: str):
     """
-    Main query processing function with CONCURRENT TTS streaming!
-
-    OLD Flow (high latency):
-    1. Stream ALL text → THEN generate ALL audio → THEN play
-       Total delay: 5s text + 2s TTS generation = 7s until first audio
-
-    NEW Flow (low latency):
-    1. Stream text AND generate TTS in parallel per sentence
-    2. Audio starts playing while text is still streaming!
-       Total delay: 1-2s until first audio (much faster!)
-
-    Key optimization: Process sentences concurrently using asyncio.Queue
+    Process a query end-to-end. All TTS work runs as tasks on a Turn
+    object so Stage 2 can cancel it for barge-in.
     """
-
+    turn = Turn()
     try:
-        # Status: Processing
-        await websocket.send_json({
-            "type": "status",
-            "status": "processing"
-        })
-
-        print(f"[USER] {user_text}")
-
-        # ============================================================
-        # CONCURRENT TEXT + AUDIO STREAMING
-        # ============================================================
+        await websocket.send_json({"type": "status", "status": "processing"})
+        print(f"[USER turn={turn.id}] {user_text}")
 
         full_response = ""
         current_sentence = ""
         audio_started = False
 
-        # Generate response using LLM with streaming
         for chunk in llm.generate_response(user_text, stream=True):
+            if turn.cancelled:
+                break
+
             full_response += chunk
             current_sentence += chunk
 
-            # Send text chunk to frontend immediately
-            await websocket.send_json({
-                "type": "transcript",
-                "text": full_response
-            })
+            await websocket.send_json({"type": "transcript", "text": full_response})
 
-            # Check for sentence boundaries (. ! ? or newline)
-            if any(punct in chunk for punct in ['. ', '! ', '? ', '\n']):
+            # Stage 1 keeps the original sentence detection. Stage 2 replaces
+            # this entire block with continuous overlapping TTS via SentenceBuffer.
+            if any(p in chunk for p in [". ", "! ", "? ", "\n"]):
                 sentence = current_sentence.strip()
-
-                if sentence:  # Only process non-empty sentences
-                    # Change status to "speaking" on first sentence
+                if sentence:
                     if not audio_started:
-                        await websocket.send_json({
-                            "type": "status",
-                            "status": "speaking"
-                        })
+                        await websocket.send_json({"type": "status", "status": "speaking"})
                         audio_started = True
-                        print("[TTS] Starting concurrent audio generation...")
+                    # Spawn TTS as a tracked task; await it immediately for Stage 1.
+                    # Stage 2 will let it run concurrently with the next iteration.
+                    task = turn.spawn(generate_and_stream_audio(websocket, sentence, turn))
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        break
+                current_sentence = ""
 
-                    # Generate TTS for this sentence concurrently
-                    # Explanation: We don't wait for TTS to finish before continuing text stream
-                    await generate_and_stream_audio(websocket, sentence)
+            await asyncio.sleep(0.02)
 
-                current_sentence = ""  # Reset for next sentence
-
-            await asyncio.sleep(0.02)  # Small delay (20ms instead of 50ms for faster feel)
-
-        # Handle any remaining text (sentence without punctuation)
-        if current_sentence.strip():
+        if current_sentence.strip() and not turn.cancelled:
             if not audio_started:
-                await websocket.send_json({
-                    "type": "status",
-                    "status": "speaking"
-                })
-            await generate_and_stream_audio(websocket, current_sentence.strip())
+                await websocket.send_json({"type": "status", "status": "speaking"})
+            task = turn.spawn(
+                generate_and_stream_audio(websocket, current_sentence.strip(), turn)
+            )
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
-        print(f"[AI] {full_response}")
+        print(f"[AI turn={turn.id}] {full_response}")
 
-        # Send final complete response
-        await websocket.send_json({
-            "type": "response",
-            "response": full_response
-        })
-
-        print("[TTS] All audio sent")
-
-        # Status: Back to ready/connected
-        await websocket.send_json({
-            "type": "status",
-            "status": "connected"
-        })
+        if not turn.cancelled:
+            await websocket.send_json({"type": "response", "response": full_response})
+            await websocket.send_json({"type": "status", "status": "connected"})
 
     except Exception as e:
-        print(f"[ERROR] Error processing query: {e}")
-        await websocket.send_json({
-            "type": "status",
-            "status": "error"
-        })
+        print(f"[ERROR turn={turn.id}] {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            await websocket.send_json({"type": "status", "status": "error"})
+        except Exception:
+            pass
+    finally:
+        # Ensure no orphan tasks survive the turn.
+        turn.cancel()
+        await turn.wait_all()
 
 
 if __name__ == "__main__":

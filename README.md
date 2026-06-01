@@ -38,14 +38,15 @@ A fully local AI voice assistant with **real-time streaming**, **wake word detec
    │ (STT) │ │(LLM) │ │(TTS) │ │
    └───────┘ └──────┘ └──────┘ │
                                 │
-                    ┌───────────▼────────────┐
-                    │ Wake Word Service      │
-                    │ (run_wake_word.py)     │
-                    │ - local-wake library   │
-                    │ - Google embeddings    │
-                    │ - DTW matching         │
-                    │ - Debounced detection  │
-                    └────────────────────────┘
+       ┌────────────────────────────────────┐
+       │ Always-On Wake Word Launcher       │
+       │ (run_wake_word.py)                 │
+       │ - openWakeWord library             │
+       │ - Pre-trained "hey_jarvis" model   │
+       │ - ONNX inference                   │
+       │ - Auto-launches servers on detect  │
+       │ - Servers auto-stop after 2m idle  │
+       └────────────────────────────────────┘
 ```
 
 ## 🚀 Quick Start
@@ -110,51 +111,40 @@ cd frontend
 npm install
 ```
 
-**6. Record wake word samples (optional - for "Hey Jarvis"):**
-```bash
-# Record 3 voice samples of "Hey Jarvis"
-python record_wake_word.py
-
-# This creates wake_word_refs/ directory with your voice samples
-# Skip this if you don't want wake word activation
-```
-
 ### Running the Assistant
 
-#### Option 1: Quick Start (Windows) - With Wake Word
+#### Option 1: Quick Start (Windows)
 ```bash
-# Start everything at once
+# Start the always-on wake word listener
 start_assistant.bat
 
-# This opens two windows:
-# 1. Backend server (port 8000) + Wake word detector
-# 2. Frontend dev server (port 5173)
+# Say "Hey Jarvis" — backend + frontend launch automatically
+# Servers auto-shutdown after 2 minutes of inactivity
+# Wake word listener keeps running for the next activation
 
-# To stop:
+# To stop everything:
 stop_assistant.bat
 ```
 
 #### Option 2: Manual Start (All Platforms)
-
-**Terminal 1 - Start Backend:**
-```bash
-cd ai_assistant
-python backend/server.py
-# Backend runs on http://localhost:8000
-```
-
-**Terminal 2 - Start Wake Word Service (optional):**
 ```bash
 cd ai_assistant
 python run_wake_word.py
-# Listens for "Hey Jarvis" and triggers recording automatically
+# Listens for "Hey Jarvis" continuously
+# On detection: launches backend (port 8000) + frontend (port 5173)
+# Servers auto-stop after 2 minutes idle
 ```
 
-**Terminal 3 - Start Frontend:**
+#### Option 3: Start Servers Manually (without wake word)
+
+**Terminal 1 - Backend:**
 ```bash
-cd ai_assistant/frontend
-npm run dev
-# Frontend runs on http://localhost:5173
+python backend/server.py
+```
+
+**Terminal 2 - Frontend:**
+```bash
+cd frontend && npm run dev
 ```
 
 **Open in browser:** http://localhost:5173
@@ -169,7 +159,7 @@ npm run dev
 5. Click **"⏹️ Stop"** when done
 6. Watch response stream in real-time
 
-**Note:** Wake word service must be running (`run_wake_word.py` or `start_assistant.bat`)
+**Note:** Wake word listener must be running (`python run_wake_word.py` or `start_assistant.bat`)
 
 ### Voice Input (Manual)
 1. Click **"🎤 Voice (Test)"** button
@@ -191,7 +181,7 @@ npm run dev
 - **Multi-turn Chat**: Conversation history maintained
 - **Concurrent Audio**: Audio starts playing after first sentence (fast!)
 - **Status Indicator**: Shows current state (listening, processing, speaking)
-- **Debounced Detection**: 2-second cooldown prevents multiple triggers
+- **Debounced Detection**: 3-second cooldown prevents multiple triggers
 
 ## ⚙️ Configuration
 
@@ -212,38 +202,23 @@ OLLAMA_TEMPERATURE=0.7
 PIPER_VOICE=en_GB-vctk-medium    # Must match downloaded voice model
 PIPER_SPEAKER=17                  # 0-108, each speaker has different voice
 
-# Wake Word Detection
-WAKE_WORD_THRESHOLD=0.22         # Lower = more sensitive (0.15-0.30 recommended)
-WAKE_WORD_DEBOUNCE=2.0           # Seconds between detections
-
 # Audio Settings
 SAMPLE_RATE=16000
 ```
 
 ### Wake Word Configuration
 
-The wake word detector uses **local-wake** library with custom voice samples:
+The wake word detector uses **openWakeWord** with a pre-trained "hey_jarvis" model. Configuration is in [wake_word/detector.py](wake_word/detector.py) and [run_wake_word.py](run_wake_word.py):
 
-**Sensitivity Tuning (`WAKE_WORD_THRESHOLD`):**
-- **0.15-0.20**: Very sensitive (may have false positives)
-- **0.22** ⭐: Balanced (recommended - 100% accuracy in testing)
-- **0.25-0.30**: Less sensitive (may miss some attempts)
-
-**Recording Your Voice:**
-```bash
-# Record 3 samples of "Hey Jarvis"
-python record_wake_word.py
-
-# Test detection accuracy
-python run_wake_word.py
-# Say "Hey Jarvis" and watch console output
-```
+- **Threshold**: `0.4` (range 0.0–1.0, lower = more sensitive)
+- **Debounce**: `3.0` seconds between detections
+- **Idle timeout**: `120` seconds — servers auto-shutdown after inactivity
 
 **How it works:**
-- Uses Google's speech embedding model (local inference via ONNX)
-- Dynamic Time Warping (DTW) matches your voice to recorded samples
-- 2-second debounce prevents multiple triggers from one utterance
-- ~50ms detection latency (nearly instant)
+- Pre-trained ML model via openWakeWord (no voice sample recording needed)
+- ONNX inference via onnxruntime
+- Audio captured at 16kHz mono via sounddevice
+- 3-second debounce prevents multiple triggers from one utterance
 
 ### Voice Selection
 
@@ -298,15 +273,19 @@ OLLAMA_MODEL=mistral:7b
 | Voice input | 2-3s | VAD auto-stop |
 | Whisper transcription | 1-2s | Small model, int8 |
 | LLM first sentence | 1-2s | Streaming |
-| **Time to first audio** | **1.5s** | **Concurrent TTS** ⚡ |
+| TTS per sentence | 0.07s | In-process Piper (25× faster) |
 | Complete response | 5-8s | Depends on length |
 
 ### Key Optimizations
 
+✅ **In-Process Piper TTS**
+- OLD: Subprocess call per sentence (1.794s each)
+- NEW: In-process PiperVoice (0.070s each)
+- **25.6× faster TTS!**
+
 ✅ **Concurrent TTS Streaming**
-- OLD: Wait for full text (5s) → Generate all audio (2s) → Play (7s total)
-- NEW: Generate audio per sentence → Start playing immediately (1.5s)
-- **79% faster perceived latency!**
+- Generate audio per sentence → Start playing immediately
+- Audio starts while LLM is still generating text
 
 ✅ **Improved Whisper Accuracy**
 - Upgraded to 'small' model (85% accuracy vs 70%)
@@ -323,8 +302,7 @@ OLLAMA_MODEL=mistral:7b
 ```
 ai-assistant/
 ├── backend/
-│   ├── server.py                  # FastAPI WebSocket server
-│   └── wake_word_local.py         # Wake word detector class
+│   └── server.py                  # FastAPI WebSocket server (2m idle auto-shutdown)
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx               # Main React component
@@ -349,13 +327,12 @@ ai-assistant/
 │   └── settings.py               # Configuration management
 ├── models/
 │   └── piper/                    # TTS voice models
-├── wake_word_refs/               # Your recorded wake word samples
-│   ├── jarvis-2.wav
-│   ├── jarvis-3.wav
-│   └── jarvis-4.wav
-├── run_wake_word.py              # Wake word service (standalone)
-├── record_wake_word.py           # Tool to record wake word samples
-├── start_assistant.bat           # Windows: Start all services
+├── wake_word/
+│   ├── __init__.py
+│   ├── detector.py               # openWakeWord detector class
+│   └── test_detector.py          # Live mic test with score visualization
+├── run_wake_word.py              # Always-on launcher (wake word → servers)
+├── start_assistant.bat           # Windows: Start wake word listener
 ├── stop_assistant.bat            # Windows: Stop all services
 ├── .env                          # Your configuration
 ├── requirements.txt              # Python dependencies
@@ -380,21 +357,15 @@ ollama serve
 
 **Wake word not detecting:**
 ```bash
-# Test wake word service alone
-python run_wake_word.py
-# Say "Hey Jarvis" clearly - should see console output
-
-# Check threshold setting
-# Edit backend/wake_word_local.py: threshold=0.22 (try 0.20-0.25)
-
-# Re-record samples if still not working
-python record_wake_word.py
+# Test detector with score visualization
+python -m wake_word.test_detector
+# Say "Hey Jarvis" and watch the score bar
+# If peak score < 0.4, lower threshold in wake_word/detector.py
 ```
 
 **Wake word too sensitive (false positives):**
-- Increase threshold: `threshold=0.25` in `backend/wake_word_local.py`
-- Ensure background is quiet during sample recording
-- Record samples in the same environment where you'll use it
+- Increase threshold in `wake_word/detector.py` (default: 0.4)
+- Increase debounce_seconds for longer cooldown between detections
 
 **Microphone not working:**
 - Allow microphone permission in browser
@@ -427,15 +398,13 @@ python record_wake_word.py
 - [x] Multi-turn conversation support
 - [x] Voice selection (109 speakers)
 - [x] Improved Whisper accuracy (85%)
-- [x] **Wake word detection ("Hey Jarvis")** 🆕
-- [x] **Local wake word processing (no cloud)** 🆕
-- [x] **Auto-start recording on wake word** 🆕
-
-### In Progress 🚧
-- [ ] Atomic LLM history commits (prevent corruption)
-- [ ] In-process Piper TTS (eliminate subprocess overhead)
-- [ ] Cancellable TTS tasks (interrupt mid-response)
-- [ ] Security hardening (CORS, rate limiting, input validation)
+- [x] Wake word detection ("Hey Jarvis")
+- [x] Local wake word processing (no cloud)
+- [x] Auto-start recording on wake word
+- [x] In-process Piper TTS (25× faster, 0.07s/sentence)
+- [x] Cancellable TTS tasks (Turn-based cancellation)
+- [x] Security hardening (CORS lockdown, audio size cap, temp file cleanup)
+- [x] Always-on wake word launcher with idle auto-shutdown
 
 ### Planned 📋
 - [ ] JARVIS-style futuristic UI redesign
@@ -465,7 +434,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 - [OpenAI Whisper](https://github.com/openai/whisper) - Speech recognition
 - [Ollama](https://ollama.ai) - Local LLM hosting
 - [Piper](https://github.com/rhasspy/piper) - Text-to-speech
-- [local-wake](https://github.com/st-matskevich/local-wake) - Wake word detection
+- [openWakeWord](https://github.com/dscripka/openWakeWord) - Wake word detection
 - [Faster-Whisper](https://github.com/guillaumekln/faster-whisper) - Optimized inference
 - [FastAPI](https://fastapi.tiangolo.com/) - WebSocket backend
 - [React](https://react.dev/) - Modern UI framework
@@ -473,9 +442,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## 📚 Documentation
 
-- [STAGE1_CRITICAL_FIXES.md](STAGE1_CRITICAL_FIXES.md) - Critical improvements in progress
-- [JARVIS_UI_REDESIGN_PLAN.md](JARVIS_UI_REDESIGN_PLAN.md) - Futuristic UI redesign plan
-- [BASELINE.txt](BASELINE.txt) - System baseline measurements
+- [BASELINE.txt](BASELINE.txt) - System baseline and performance measurements
 - Architecture diagrams in README (see above)
 
 ## 💬 Support

@@ -1,7 +1,7 @@
 # Core dependencies
 faster-whisper>=0.10.0        # Optimized Whisper inference
 ollama>=0.1.0                 # Ollama Python client
-piper-tts>=1.2.0              # Piper TTS
+piper-tts>=1.3.0,<2.0         # Piper TTS (1.3.0+ API: AudioChunk streaming)
 # pyaudio>=0.2.13             # Audio recording/playback - REMOVED (sounddevice is better on Windows)
 numpy>=1.24.0                 # Audio processing
 sounddevice>=0.4.6            # Audio I/O (replaces pyaudio)
@@ -24,3 +24,7 @@ pydantic>=2.0.0               # Data validation
 pydantic-settings>=2.0.0      # Settings management
 pyyaml>=6.0                   # Config file parsing
 rich>=13.0.0                  # Terminal formatting
+
+# Testing
+pytest>=8.0
+pytest-asyncio>=0.23

@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
 class Settings(BaseSettings):
@@ -16,10 +16,11 @@ class Settings(BaseSettings):
     OLLAMA_HOST: str = "http://localhost:11434"
     OLLAMA_TIMEOUT: int = 120
     OLLAMA_TEMPERATURE: float = 0.7
+    MAX_HISTORY_TURNS: int = 20
 
     # Piper TTS settings
-    PIPER_VOICE: str = "en_US-lessac-medium"
-    PIPER_SPEAKER: int = 0
+    PIPER_VOICE: str = "en_GB-vctk-medium"
+    PIPER_SPEAKER: int = 17
 
     @property
     def PIPER_MODEL_PATH(self) -> Path:
@@ -31,6 +32,11 @@ class Settings(BaseSettings):
     CHANNELS: int = 1
     AUDIO_FORMAT: str = "int16"
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    # Security settings
+    CORS_ORIGINS: str = "http://localhost:5173"
+    MAX_AUDIO_MB: str = "10"
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True
+    )

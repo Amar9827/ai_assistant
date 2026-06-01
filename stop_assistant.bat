@@ -4,11 +4,14 @@ echo Stopping AI Voice Assistant
 echo ============================================================
 echo.
 
-echo Stopping Backend Server...
-taskkill //F //FI "WINDOWTITLE eq AI Voice Assistant - Backend*" >nul 2>&1
+echo Stopping Wake Word Listener...
+taskkill //F //FI "WINDOWTITLE eq AI Voice Assistant*" >nul 2>&1
 
-echo Stopping Wake Word Detection...
-taskkill //F //FI "WINDOWTITLE eq AI Voice Assistant - Wake Word*" >nul 2>&1
+echo Stopping Backend Server (if running)...
+taskkill //F //FI "IMAGENAME eq python.exe" //FI "WINDOWTITLE eq *server*" >nul 2>&1
+
+echo Stopping Frontend (if running)...
+taskkill //F //FI "WINDOWTITLE eq *vite*" >nul 2>&1
 
 echo.
 echo ============================================================
