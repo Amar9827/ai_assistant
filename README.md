@@ -273,15 +273,19 @@ OLLAMA_MODEL=mistral:7b
 | Voice input | 2-3s | VAD auto-stop |
 | Whisper transcription | 1-2s | Small model, int8 |
 | LLM first sentence | 1-2s | Streaming |
-| **Time to first audio** | **1.5s** | **Concurrent TTS** ⚡ |
+| TTS per sentence | 0.07s | In-process Piper (25× faster) |
 | Complete response | 5-8s | Depends on length |
 
 ### Key Optimizations
 
+✅ **In-Process Piper TTS**
+- OLD: Subprocess call per sentence (1.794s each)
+- NEW: In-process PiperVoice (0.070s each)
+- **25.6× faster TTS!**
+
 ✅ **Concurrent TTS Streaming**
-- OLD: Wait for full text (5s) → Generate all audio (2s) → Play (7s total)
-- NEW: Generate audio per sentence → Start playing immediately (1.5s)
-- **79% faster perceived latency!**
+- Generate audio per sentence → Start playing immediately
+- Audio starts while LLM is still generating text
 
 ✅ **Improved Whisper Accuracy**
 - Upgraded to 'small' model (85% accuracy vs 70%)
@@ -394,15 +398,13 @@ python -m wake_word.test_detector
 - [x] Multi-turn conversation support
 - [x] Voice selection (109 speakers)
 - [x] Improved Whisper accuracy (85%)
-- [x] **Wake word detection ("Hey Jarvis")** 🆕
-- [x] **Local wake word processing (no cloud)** 🆕
-- [x] **Auto-start recording on wake word** 🆕
-
-### In Progress 🚧
-- [ ] Atomic LLM history commits (prevent corruption)
-- [ ] In-process Piper TTS (eliminate subprocess overhead)
-- [ ] Cancellable TTS tasks (interrupt mid-response)
-- [ ] Security hardening (CORS, rate limiting, input validation)
+- [x] Wake word detection ("Hey Jarvis")
+- [x] Local wake word processing (no cloud)
+- [x] Auto-start recording on wake word
+- [x] In-process Piper TTS (25× faster, 0.07s/sentence)
+- [x] Cancellable TTS tasks (Turn-based cancellation)
+- [x] Security hardening (CORS lockdown, audio size cap, temp file cleanup)
+- [x] Always-on wake word launcher with idle auto-shutdown
 
 ### Planned 📋
 - [ ] JARVIS-style futuristic UI redesign
@@ -440,9 +442,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## 📚 Documentation
 
-- [STAGE1_CRITICAL_FIXES.md](STAGE1_CRITICAL_FIXES.md) - Critical improvements in progress
-- [JARVIS_UI_REDESIGN_PLAN.md](JARVIS_UI_REDESIGN_PLAN.md) - Futuristic UI redesign plan
-- [BASELINE.txt](BASELINE.txt) - System baseline measurements
+- [BASELINE.txt](BASELINE.txt) - System baseline and performance measurements
 - Architecture diagrams in README (see above)
 
 ## 💬 Support
