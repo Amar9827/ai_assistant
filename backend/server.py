@@ -81,6 +81,40 @@ app = FastAPI(title="AI Voice Assistant", version="2.0")
 active_websockets = set()
 wake_word_enabled = True
 
+# ============================================================
+# Idle Auto-Shutdown (2 minutes)
+# ============================================================
+import time as _time
+import os as _os
+import signal as _signal
+
+IDLE_TIMEOUT_SECONDS = 120  # 2 minutes
+_last_activity_time = _time.time()
+_idle_shutdown_task: asyncio.Task | None = None
+
+
+def _touch_activity():
+    """Reset the idle timer."""
+    global _last_activity_time
+    _last_activity_time = _time.time()
+
+
+async def _idle_shutdown_watcher():
+    """Background task: shuts down the server after IDLE_TIMEOUT_SECONDS of no activity."""
+    while True:
+        await asyncio.sleep(10)  # check every 10s
+        idle_seconds = _time.time() - _last_activity_time
+        if idle_seconds >= IDLE_TIMEOUT_SECONDS:
+            print(f"[IDLE] No activity for {int(idle_seconds)}s — shutting down")
+            # Close all WebSocket connections gracefully
+            for ws in list(active_websockets):
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+            await asyncio.sleep(0.5)
+            _os._exit(0)
+
 # Initialize AI components
 settings = Settings()
 llm = LLMProcessor(settings)
@@ -124,9 +158,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[WARN] Could not initialize Piper: {e}")
 
+    # Start idle shutdown watcher
+    global _idle_shutdown_task
+    _idle_shutdown_task = asyncio.create_task(_idle_shutdown_watcher())
+    print(f"[OK] Idle auto-shutdown enabled ({IDLE_TIMEOUT_SECONDS}s)")
+
     yield
 
     # Shutdown (cleanup if needed)
+    if _idle_shutdown_task:
+        _idle_shutdown_task.cancel()
     print("[INFO] Server shutting down")
 
 # Apply lifespan to app
@@ -151,6 +192,7 @@ async def wake_word_trigger():
     Called by external wake word service when 'Hey Jarvis' is detected
     Broadcasts to all connected WebSocket clients to start listening
     """
+    _touch_activity()
     print("[WAKE WORD] Trigger received - broadcasting to clients...")
 
     # Broadcast wake word event to all connected clients
@@ -208,6 +250,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     # Add to active websockets for wake word broadcasting
     active_websockets.add(websocket)
+    _touch_activity()
     print(f"[WS] Active connections: {len(active_websockets)}")
 
     try:
@@ -233,10 +276,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif data["type"] == "audio_data":
                 # Receive audio from frontend and transcribe
+                _touch_activity()
                 await handle_audio_data(websocket, data)
 
             elif data["type"] == "text_query":
                 # Handle text-only query (useful for testing)
+                _touch_activity()
                 user_text = data.get("text", "")
                 if user_text:
                     await handle_voice_query(websocket, user_text)
