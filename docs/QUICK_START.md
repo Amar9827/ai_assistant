@@ -2,7 +2,7 @@
 
 ## Start Everything (Easiest)
 
-**Double-click:** `start_assistant.bat`
+**Double-click:** `scripts\start_assistant.bat`
 
 This opens 2 windows:
 - Backend Server (port 8000)
@@ -14,14 +14,15 @@ Say **"Hey Jarvis"** → Screen flashes → Recording starts!
 
 ## Stop Everything
 
-**Double-click:** `stop_assistant.bat`
+**Double-click:** `scripts\stop_assistant.bat`
 
 ## Files You Need
 
 ```
 ai-assistant/
-├── start_assistant.bat     ← Double-click this to START
-├── stop_assistant.bat      ← Double-click this to STOP
+├── scripts/
+│   ├── start_assistant.bat ← Double-click this to START
+│   └── stop_assistant.bat  ← Double-click this to STOP
 ├── run_wake_word.py        ← Wake word service
 ├── backend/server.py       ← Backend server
 └── wake_word_refs/         ← Your 3 "Hey Jarvis" samples
@@ -42,10 +43,10 @@ ai-assistant/
 
 ```bash
 # Start (2 windows)
-start_assistant.bat
+scripts\start_assistant.bat
 
 # Stop
-stop_assistant.bat
+scripts\stop_assistant.bat
 
 # Start (1 window)
 python run_all.py
@@ -63,7 +64,7 @@ record_samples.bat
 → Speak louder or run: `record_samples.bat`
 
 **Port 8000 already in use?**
-→ Run: `stop_assistant.bat`
+→ Run: `scripts\stop_assistant.bat`
 
 **Frontend not connecting?**
 → Make sure backend is running first

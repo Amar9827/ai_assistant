@@ -88,12 +88,12 @@ pip install -r requirements.txt
 # Create models directory
 mkdir -p models/piper
 
-# Download voice model (British English, 109 speakers)
+# Download voice model (British English, JARVIS-like voice)
 cd models/piper
 # Download from: https://github.com/rhasspy/piper/releases
-# Example for en_GB-vctk-medium:
-wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/vctk/medium/en_GB-vctk-medium.onnx
-wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/vctk/medium/en_GB-vctk-medium.onnx.json
+# Default voice: en_GB-alan-medium (refined British male, similar to JARVIS)
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json
 ```
 
 **4. Configure environment:**
@@ -116,14 +116,14 @@ npm install
 #### Option 1: Quick Start (Windows)
 ```bash
 # Start the always-on wake word listener
-start_assistant.bat
+scripts\start_assistant.bat
 
 # Say "Hey Jarvis" — backend + frontend launch automatically
 # Servers auto-shutdown after 2 minutes of inactivity
 # Wake word listener keeps running for the next activation
 
 # To stop everything:
-stop_assistant.bat
+scripts\stop_assistant.bat
 ```
 
 #### Option 2: Manual Start (All Platforms)
@@ -159,7 +159,7 @@ cd frontend && npm run dev
 5. Click **"⏹️ Stop"** when done
 6. Watch response stream in real-time
 
-**Note:** Wake word listener must be running (`python run_wake_word.py` or `start_assistant.bat`)
+**Note:** Wake word listener must be running (`python run_wake_word.py` or `scripts\start_assistant.bat`)
 
 ### Voice Input (Manual)
 1. Click **"🎤 Voice (Test)"** button
@@ -199,8 +199,9 @@ OLLAMA_HOST=http://localhost:11434
 OLLAMA_TEMPERATURE=0.7
 
 # Piper TTS (Text-to-Speech)
-PIPER_VOICE=en_GB-vctk-medium    # Must match downloaded voice model
-PIPER_SPEAKER=17                  # 0-108, each speaker has different voice
+PIPER_VOICE=en_GB-alan-medium     # JARVIS-like British male voice
+PIPER_SPEAKER=0                    # alan is single-speaker
+PIPER_LENGTH_SCALE=0.85            # Slightly faster speech
 
 # Audio Settings
 SAMPLE_RATE=16000
@@ -222,24 +223,20 @@ The wake word detector uses **openWakeWord** with a pre-trained "hey_jarvis" mod
 
 ### Voice Selection
 
-The `en_GB-vctk-medium` model has **109 different speakers**. To choose a different voice:
+The default voice is **`en_GB-alan-medium`** — a refined British male voice similar to JARVIS from Iron Man. To use a multi-speaker voice instead:
 
-1. Run the voice testing tool:
+1. Download `en_GB-vctk-medium` (109 speakers):
 ```bash
-python test_voices.py  # Generates samples for 14 female voices
+cd models/piper
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/vctk/medium/en_GB-vctk-medium.onnx
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/vctk/medium/en_GB-vctk-medium.onnx.json
 ```
 
-2. Listen to the generated `.wav` files
-3. Update `.env` with your favorite speaker ID:
+2. Update `.env`:
 ```env
-PIPER_SPEAKER=17  # Change this number (0-108)
+PIPER_VOICE=en_GB-vctk-medium
+PIPER_SPEAKER=17  # 0-108, each speaker has a different voice
 ```
-
-**Popular female voices:**
-- Speaker 17 (p238): Smooth & conversational ⭐
-- Speaker 11 (p276): Clear & neutral
-- Speaker 22 (p230): Warm & friendly
-- Speaker 25 (p243): Professional
 
 ### Model Options
 
@@ -332,8 +329,16 @@ ai-assistant/
 │   ├── detector.py               # openWakeWord detector class
 │   └── test_detector.py          # Live mic test with score visualization
 ├── run_wake_word.py              # Always-on launcher (wake word → servers)
-├── start_assistant.bat           # Windows: Start wake word listener
-├── stop_assistant.bat            # Windows: Stop all services
+├── scripts/
+│   ├── start_assistant.bat       # Windows: Start wake word listener
+│   ├── stop_assistant.bat        # Windows: Stop all services
+│   ├── install.bat               # Windows installer
+│   └── install.sh                # Linux/Mac installer
+├── docs/
+│   ├── PROJECT_ROADMAP.md        # 5-phase improvement plan
+│   ├── PROJECT_SUMMARY.md        # Architecture overview
+│   ├── QUICK_START.md            # Quick start guide
+│   └── BASELINE.txt              # Performance baseline data
 ├── .env                          # Your configuration
 ├── requirements.txt              # Python dependencies
 └── README.md

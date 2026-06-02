@@ -97,9 +97,15 @@ class TextToSpeech:
             self._speaker_kwarg_supported = False
 
     def _synth_kwargs(self) -> dict:
+        from piper.config import SynthesisConfig
+        kwargs = {}
         if self._speaker_kwarg_supported and self._speaker_id is not None:
-            from piper.config import SynthesisConfig
-            return {"syn_config": SynthesisConfig(speaker_id=self._speaker_id)}
+            kwargs["speaker_id"] = self._speaker_id
+        length_scale = getattr(self.settings, "PIPER_LENGTH_SCALE", 1.0)
+        if length_scale != 1.0:
+            kwargs["length_scale"] = length_scale
+        if kwargs:
+            return {"syn_config": SynthesisConfig(**kwargs)}
         return {}
 
     def synthesize(self, text: str) -> np.ndarray:

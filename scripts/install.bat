@@ -1,5 +1,6 @@
 @echo off
 REM Installation script for AI Voice Assistant (Windows)
+cd /d %~dp0..
 
 echo ==================================
 echo AI Voice Assistant Installer

@@ -4,7 +4,7 @@ echo Starting AI Voice Assistant — Wake Word Listener
 echo ============================================================
 echo.
 
-cd /d %~dp0
+cd /d %~dp0..
 call venv\Scripts\activate.bat
 
 echo Wake word listener will run continuously.

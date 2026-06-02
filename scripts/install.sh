@@ -2,6 +2,7 @@
 # Installation script for AI Voice Assistant (Linux/Mac)
 
 set -e
+cd "$(dirname "$0")/.."
 
 echo "=================================="
 echo "AI Voice Assistant Installer"

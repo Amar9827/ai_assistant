@@ -115,6 +115,10 @@ async def _idle_shutdown_watcher():
             await asyncio.sleep(0.5)
             _os._exit(0)
 
+# Track whether the startup greeting has been played
+_greeting_played = False
+
+
 # Initialize AI components
 settings = Settings()
 llm = LLMProcessor(settings)
@@ -148,7 +152,10 @@ async def lifespan(app: FastAPI):
 
     try:
         stt.initialize()
-        print("[OK] Whisper model loaded")
+        if stt.provider == "groq":
+            print(f"[OK] STT: Groq cloud ({settings.GROQ_STT_MODEL}), fallback: local ({settings.WHISPER_MODEL})")
+        else:
+            print(f"[OK] STT: local faster-whisper ({settings.WHISPER_MODEL})")
     except Exception as e:
         print(f"[WARN] Could not load Whisper: {e}")
 
@@ -259,6 +266,29 @@ async def websocket_endpoint(websocket: WebSocket):
             "type": "status",
             "status": "connected"
         })
+
+        # Play startup greeting on first connection after server boot
+        global _greeting_played
+        if not _greeting_played:
+            _greeting_played = True
+            greeting = (
+                "Systems initialized. Welcome back, Amar. "
+                "What shall we tackle today, sir?"
+            )
+            try:
+                greeting_turn = Turn()
+                await websocket.send_json({"type": "status", "status": "speaking"})
+                await websocket.send_json({
+                    "type": "assistant_token",
+                    "token": greeting,
+                    "done": True,
+                })
+                await generate_and_stream_audio(websocket, greeting, greeting_turn)
+                await websocket.send_json({"type": "audio_done"})
+                await websocket.send_json({"type": "status", "status": "connected"})
+                print("[JARVIS] Startup greeting played")
+            except Exception as e:
+                print(f"[JARVIS] Greeting failed: {e}")
 
         # Main message loop - wait for messages from frontend
         while True:

@@ -8,12 +8,12 @@ pytest.importorskip("piper")
 
 from src.core.tts import TextToSpeech
 
-# Locate a model file. Prefer env override, then the README-documented voice,
+# Locate a model file. Prefer env override, then the default voice,
 # then any *.onnx under models/piper.
 _REPO_ROOT = Path(__file__).parent.parent
 _CANDIDATES = [
     Path(os.environ.get("PIPER_MODEL_PATH", "")) if os.environ.get("PIPER_MODEL_PATH") else None,
-    _REPO_ROOT / "models" / "piper" / "en_GB-vctk-medium.onnx",
+    _REPO_ROOT / "models" / "piper" / "en_GB-alan-medium.onnx",
     *sorted((_REPO_ROOT / "models" / "piper").glob("*.onnx")),
 ]
 MODEL_PATH = next((p for p in _CANDIDATES if p and p.exists()), None)

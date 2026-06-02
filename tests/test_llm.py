@@ -12,8 +12,9 @@ class FakeOllamaResponse:
 
 def _make_llm(settings, response):
     llm = LLMProcessor(settings)
-    llm.client = MagicMock()
-    llm.client.chat = MagicMock(return_value=response)
+    llm.provider = "ollama"  # Force Ollama path for unit tests
+    llm.ollama_client = MagicMock()
+    llm.ollama_client.chat = MagicMock(return_value=response)
     return llm
 
 def test_streaming_full_consumption_commits_both_turns(settings):
@@ -56,10 +57,11 @@ def test_non_streaming_commits_atomically(settings):
 
 def test_history_is_capped(settings):
     llm = LLMProcessor(settings)
+    llm.provider = "ollama"
     llm.max_history_turns = 3  # Cap at 3 turns = 6 messages
-    llm.client = MagicMock()
+    llm.ollama_client = MagicMock()
     for i in range(10):
-        llm.client.chat = MagicMock(return_value={"message": {"content": f"reply{i}"}})
+        llm.ollama_client.chat = MagicMock(return_value={"message": {"content": f"reply{i}"}})
         llm.generate_response(f"q{i}")
     assert len(llm.conversation_history) == 6  # 3 turns * 2 messages
     # Last user message should be q9
