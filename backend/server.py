@@ -572,10 +572,9 @@ async def handle_voice_query(websocket: WebSocket, user_text: str, current_turn=
 
         # Use a fast LLM classifier to decide whether this query needs a real-time
         # web search, and to rewrite follow-up queries into self-contained search terms.
-        # Skip entirely when Groq is rate-limited: the router uses Groq, and stuffing
-        # web results into slow Ollama just makes it even slower.
+        # When Groq is rate-limited, falls back to keyword-based router (<1ms, zero tokens).
         llm_input = user_text
-        if settings.TAVILY_API_KEY and not llm.groq_rate_limited:
+        if settings.TAVILY_API_KEY:
             should_search_web, search_query = await llm.classify_and_route(user_text)
             if should_search_web:
                 try:

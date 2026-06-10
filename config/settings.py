@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     OLLAMA_HOST: str = "http://localhost:11434"
     OLLAMA_TIMEOUT: int = 120
     OLLAMA_TEMPERATURE: float = 0.7
-    MAX_HISTORY_TURNS: int = 20
+    MAX_HISTORY_TURNS: int = 10
 
     # LLM provider: "ollama" (local) or "groq" (cloud)
     LLM_PROVIDER: str = "ollama"

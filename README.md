@@ -8,8 +8,10 @@ A J.A.R.V.I.S.-inspired AI voice assistant with **real-time streaming**, **wake 
 - 🎤 **Speech-to-Text**: Groq cloud (whisper-large-v3-turbo) with local Whisper fallback
 - 🤖 **Dual LLM Support**: Groq cloud (llama-3.3-70b) primary, Ollama local fallback
 - 🔊 **Text-to-Speech**: Piper TTS with British male voice (JARVIS persona)
-- 🌐 **Web Search**: Tavily-powered real-time search with LLM-based query routing
+- 🌐 **Web Search**: Tavily-powered real-time search with LLM-based query routing + result caching
 - 🧠 **JARVIS Persona**: Iron Man-inspired AI personality — formal, composed, witty
+- 🧠 **Anti-Hallucination**: Knowledge boundaries, search conflict rules, date/time awareness
+- 👤 **Personal Memory**: JSON-based user profile — knows your name, location, profession, interests
 - ⚡ **Low Latency**: ~1.5s to first audio, concurrent TTS streaming
 - 🌐 **Modern Web UI**: React-based with cyberpunk design
 - 🎨 **Real-time Visualization**: Live waveform during recording
@@ -354,13 +356,27 @@ OLLAMA_MODEL=mistral:7b
 
 ✅ **LLM-Based Query Routing**
 - Fast classifier (llama-3.1-8b-instant, ~200ms) decides search vs direct answer
-- Context-aware query rewriting: "what about 2025?" → "US Open 2025 winner"
-- Skipped entirely during Groq rate limit (avoids adding latency to Ollama path)
+- Context-aware query rewriting with pronoun resolution: "who won it in 2025?" → "2025 French Open winner"
+- Keyword-based fallback router when Groq is rate-limited (zero tokens, <1ms)
+- Personal questions (my name, my interests) excluded from web search
 
 ✅ **Web Search via Tavily API**
 - Real-time search results injected into LLM context
 - 3-result summary with AI-generated answer
 - 5-second timeout to prevent blocking
+- In-memory result cache (4h TTL, 1h for weather/prices, 200 entries max, LRU eviction)
+
+✅ **Anti-Hallucination System**
+- Dynamic date and time in system prompt (updated per query)
+- Knowledge boundary enforcement (training cutoff awareness)
+- Search conflict rule: web results always override training data
+- Never fabricates dates, scores, names, or statistics
+
+✅ **Personal Memory**
+- JSON-based user profile (`memory/user_profile.json`)
+- Injects operator context into system prompt (name, location, profession, interests)
+- Corrections tracking to prevent repeated mistakes
+- Zero latency cost (loaded at startup, not per-query)
 
 ✅ **Non-Blocking LLM Streaming**
 - LLM generation runs on worker thread via `asyncio.Queue`
@@ -402,12 +418,15 @@ ai-assistant/
 │   │   ├── stt.py                # STT: Groq cloud + local Whisper fallback
 │   │   ├── llm.py                # LLM: Groq + Ollama fallback, query router
 │   │   ├── tts.py                # Piper TTS (in-process)
+│   │   ├── memory.py             # Personal memory system (user profile loader)
 │   │   ├── audio_utils.py        # Audio I/O
 │   │   └── assistant.py          # CLI interface (legacy)
 │   ├── tools/
-│   │   └── web_search.py         # Tavily web search integration
+│   │   └── web_search.py         # Tavily web search + result caching
 │   └── interfaces/
 │       └── cli.py                # Terminal interface
+├── memory/
+│   └── user_profile.json         # Personal user profile (name, preferences, etc.)
 ├── config/
 │   └── settings.py               # Pydantic settings (.env loader)
 ├── models/
@@ -498,13 +517,17 @@ python -m wake_word.test_detector
 - [x] Groq rate limit tracking with automatic Ollama fallback
 - [x] Non-blocking LLM streaming (worker threads + asyncio.Queue)
 - [x] Configurable idle auto-shutdown (env-based, client-aware)
+- [x] Anti-hallucination system (knowledge boundaries, date/time awareness, search conflict rules)
+- [x] Personal memory system (JSON user profile → system prompt injection)
+- [x] Web search result caching (in-memory, TTL-based, query normalization)
+- [x] Improved query router (pronoun resolution, personal question exclusion, keyword fallback)
+- [x] Dynamic date and time in system prompt (updated per query, not at startup)
 
 ### Planned 📋
 - [ ] JARVIS-style futuristic UI redesign
 - [ ] RAG integration (personal knowledge base)
 - [ ] Multi-language support
 - [ ] Voice activity detection during response
-- [ ] Conversation memory across sessions
 - [ ] Desktop app (Electron wrapper)
 - [ ] Plugin system for custom tools
 

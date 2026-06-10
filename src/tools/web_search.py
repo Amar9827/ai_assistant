@@ -2,10 +2,57 @@
 
 import aiohttp
 import asyncio
+import re
+import time
 from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+# --------------- Search cache ---------------
+_CACHE: dict[str, tuple[float, dict]] = {}  # normalised_query -> (timestamp, result)
+_CACHE_MAX = 200
+_TTL_DEFAULT = 4 * 3600   # 4 hours
+_TTL_SHORT = 1 * 3600     # 1 hour  (weather, prices, stock)
+_SHORT_TTL_PATTERNS = re.compile(
+    r"weather|temperature|forecast|stock|price|exchange rate",
+    re.IGNORECASE,
+)
+
+def _normalise_query(q: str) -> str:
+    """Lowercase, strip punctuation, collapse whitespace."""
+    q = q.lower().strip()
+    q = re.sub(r"[^\w\s]", "", q)
+    return re.sub(r"\s+", " ", q)
+
+def _ttl_for(query: str) -> int:
+    return _TTL_SHORT if _SHORT_TTL_PATTERNS.search(query) else _TTL_DEFAULT
+
+def _evict():
+    """Drop oldest entries when cache exceeds max size."""
+    if len(_CACHE) <= _CACHE_MAX:
+        return
+    # sort by timestamp, remove oldest
+    sorted_keys = sorted(_CACHE, key=lambda k: _CACHE[k][0])
+    for k in sorted_keys[:len(_CACHE) - _CACHE_MAX]:
+        del _CACHE[k]
+
+def _cache_get(query: str) -> Optional[dict]:
+    key = _normalise_query(query)
+    entry = _CACHE.get(key)
+    if entry is None:
+        return None
+    ts, data = entry
+    if time.monotonic() - ts > _ttl_for(query):
+        del _CACHE[key]
+        return None
+    logger.info(f"[CACHE] Hit for '{query}'")
+    return data
+
+def _cache_put(query: str, data: dict):
+    key = _normalise_query(query)
+    _CACHE[key] = (time.monotonic(), data)
+    _evict()
 
 
 async def search_web(query: str, num_results: int = 3, api_key: str = "") -> dict:
@@ -48,6 +95,11 @@ async def search_web(query: str, num_results: int = 3, api_key: str = "") -> dic
             "error": "Search query cannot be empty"
         }
     
+    # Check cache before hitting Tavily
+    cached = _cache_get(query)
+    if cached is not None:
+        return cached
+    
     try:
         async with aiohttp.ClientSession() as session:
             # Tavily API endpoint
@@ -87,12 +139,14 @@ async def search_web(query: str, num_results: int = 3, api_key: str = "") -> dic
                 
                 logger.info(f"[TAVILY] Found {len(results)} results for '{query}'")
                 
-                return {
+                result = {
                     "success": True,
                     "results": results,
                     "answer": data.get("answer", ""),  # AI-generated summary from Tavily
                     "query": query
                 }
+                _cache_put(query, result)
+                return result
     
     except asyncio.TimeoutError:
         logger.warning(f"[TAVILY] Search timed out for '{query}'")

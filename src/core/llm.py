@@ -3,12 +3,14 @@ import ollama
 import asyncio
 import re
 import time
+from datetime import date, datetime
 from groq import Groq
 import httpx
 import json
 from typing import List, Dict, Generator
 from config.settings import Settings
 from src.tools.web_search import search_web, format_search_results_for_llm
+from src.core.memory import get_memory_context
 
 logger = logging.getLogger(__name__)
 
@@ -31,33 +33,49 @@ class LLMProcessor:
         # Groq rate-limit tracking: skip Groq entirely until cooldown expires
         self._groq_rate_limited_until: float = 0.0
 
-        # JARVIS persona system prompt
-        self.system_prompt = {
-            "role": "system",
-            "content": (
-                "You are J.A.R.V.I.S. — Just A Rather Very Intelligent System — "
-                "a highly capable AI voice assistant inspired by the iconic AI from the Iron Man films. "
-                "You serve your operator, Amar, with precision and composure.\n\n"
-                "PERSONALITY:\n"
-                "- Formal, composed, and precise. Professional with dry wit when appropriate.\n"
-                "- Address the user as 'sir' occasionally but naturally, not robotically.\n"
-                "- Never hedge unnecessarily or second-guess the user's intent.\n"
-                "- When you make a mistake, acknowledge it briefly and correct immediately.\n\n"
-                "VOICE RULES:\n"
-                "- Keep responses concise: 1-3 sentences for simple queries, up to 5 for complex ones.\n"
-                "- Speak naturally as if talking, not writing. No markdown, no bullet points, no headers.\n"
-                "- Never read out URLs, file paths, or code aloud.\n"
-                "- Get straight to the point. No filler phrases like 'Great question!' or 'That's interesting!'.\n"
-                "- Use natural spoken language: 'You have 58 gigabytes available, sir' NOT 'Available: 58GB'.\n\n"
-                "TOOLS:\n"
-                "- Use web_search to answer time-sensitive questions, current events, weather, prices, latest news.\n"
-                "- Do NOT use web_search for general knowledge, history, or questions answerable from training data.\n\n"
-                "CONTEXT:\n"
-                "- You are running on a Windows system (Dell Latitude 5440, i7-1370P, 32GB RAM).\n"
-                "- Current date and time should be inferred from conversation context.\n"
-                "- You are a voice assistant — your responses will be spoken aloud via text-to-speech."
-            )
-        }
+        # Static base of JARVIS persona system prompt (date/time injected dynamically)
+        self._system_prompt_base = (
+            "You are J.A.R.V.I.S. — Just A Rather Very Intelligent System — "
+            "a highly capable AI voice assistant inspired by the iconic AI from the Iron Man films. "
+            "You serve your operator, Amar, with precision and composure.\n\n"
+            "PERSONALITY:\n"
+            "- Formal, composed, and precise. Professional with dry wit when appropriate.\n"
+            "- Address the user as 'sir' occasionally but naturally, not robotically.\n"
+            "- When you make a mistake, acknowledge it briefly and correct immediately.\n\n"
+            "VOICE RULES:\n"
+            "- Keep responses concise: 1-3 sentences for simple queries, up to 5 for complex ones.\n"
+            "- Speak naturally as if talking, not writing. No markdown, no bullet points, no headers.\n"
+            "- Never read out URLs, file paths, or code aloud.\n"
+            "- Get straight to the point. No filler phrases like 'Great question!' or 'That's interesting!'.\n"
+            "- Use natural spoken language: 'You have 58 gigabytes available, sir' NOT 'Available: 58GB'.\n\n"
+            "KNOWLEDGE BOUNDARIES:\n"
+            "{datetime_line}"
+            "- Your training data ends around mid-2024. Anything after that is UNKNOWN to you.\n"
+            "- For events, results, prices, or news after mid-2024: use web search or say 'I don't have that information, sir.'\n"
+            "- NEVER fabricate dates, scores, names, statistics, or outcomes. If unsure, say so.\n"
+            "- If asked about yourself: you are JARVIS, running locally. Do not invent capabilities you lack.\n\n"
+            "SEARCH CONFLICT RULE:\n"
+            "- If web search results contradict your training data, ALWAYS trust the search results.\n"
+            "- They are more recent and authoritative. Never override search results with your prior beliefs.\n\n"
+            "CONTEXT:\n"
+            "- You are running on a Windows system (Dell Latitude 5440, i7-1370P, 32GB RAM).\n"
+            "- You are a voice assistant — your responses will be spoken aloud via text-to-speech."
+        )
+
+        # Cache personal memory context (reloaded on restart, not per-query)
+        self._memory_ctx = get_memory_context()
+
+    def _get_system_prompt(self) -> dict:
+        """Build the system prompt with current date and time."""
+        now = datetime.now()
+        datetime_line = (
+            f"- Today is {now.strftime('%B %d, %Y')} and the current local time is "
+            f"{now.strftime('%I:%M %p').lstrip('0')} IST.\n"
+        )
+        content = self._system_prompt_base.format(datetime_line=datetime_line)
+        if self._memory_ctx:
+            content += "\n\n" + self._memory_ctx
+        return {"role": "system", "content": content}
     
     def _get_tools(self):
         """Define available tools for LLM function-calling."""
@@ -115,16 +133,49 @@ class LLMProcessor:
         remaining = int(cooldown)
         logger.warning(f"[GROQ] Rate limited — skipping Groq for {remaining}s")
 
+    @staticmethod
+    def _keyword_needs_search(text: str) -> tuple[bool, str]:
+        """Fast regex fallback router when Groq is unavailable. Zero tokens, <1ms."""
+        text_lower = text.lower()
+
+        # Personal questions — answered from profile, never search
+        if re.search(r'\b(my name|my interest|my job|about me|my expertise|my project)\b', text_lower):
+            return False, text
+
+        # Explicit search commands — always search
+        if re.search(r'\b(look it up|search for it|google it|find out|check online)\b', text_lower):
+            return True, text
+
+        # Year mentions >= 2025
+        if re.search(r'\b202[5-9]\b|\b20[3-9]\d\b', text):
+            return True, text
+
+        # Trigger phrases
+        triggers = [
+            r'\b(who won|who will win|latest|current price|weather|forecast)\b',
+            r'\b(stock price|bitcoin|crypto|score|results|standings)\b',
+            r'\b(news|headline|update|announced|released|launched)\b',
+            r'\b(how much does|what is the price|election)\b',
+            r'\b(table|rank|ranking|playoff|finals?)\b',
+            r'\bvs\.?\b',
+            r'\b(new|upcoming|just came out|came out)\b',
+        ]
+        for pattern in triggers:
+            if re.search(pattern, text_lower):
+                return True, text
+
+        return False, text
+
     async def classify_and_route(self, user_text: str) -> tuple[bool, str]:
         """
         Use a fast LLM call to decide whether the query needs a real-time web search,
         and rewrite it into an optimal search query incorporating conversation context.
 
         Returns (should_search: bool, optimized_query: str).
-        Falls back to (False, user_text) on any error so the assistant never breaks.
+        Falls back to keyword router when Groq is unavailable.
         """
         if not self.groq_client or self.groq_rate_limited:
-            return False, user_text
+            return self._keyword_needs_search(user_text)
 
         # Include recent turns so follow-ups like "what about 2025?" get rewritten
         # into fully-qualified queries like "US Open tennis 2025 winner".
@@ -136,14 +187,32 @@ class LLMProcessor:
 
         prompt = (
             "You are a query router. Decide if the user's query needs a real-time web search.\n\n"
-            "NEEDS SEARCH: current events, live prices, today's weather, recent sports results, "
-            "news, anything time-sensitive or that changes after mid-2024.\n"
-            "NO SEARCH NEEDED: general knowledge, math, coding, definitions, history before 2024, "
-            "anything answerable from training data without needing live data.\n\n"
+            "NO SEARCH NEEDED:\n"
+            "- Greetings, thanks, goodbye, conversational chat\n"
+            "- Personal questions about the USER (my name, my interests, my job, about me) — "
+            "these are answered from the user profile, NOT web search\n"
+            "- Personal questions about the assistant (who are you)\n"
+            "- General knowledge, math, coding, definitions, history before 2024\n"
+            "- Anything answerable from training data or user profile\n\n"
+            "NEEDS SEARCH:\n"
+            "- Questions mentioning years >= 2025, 'who won', 'what happened'\n"
+            "- 'latest', 'current price', weather, stock prices, sports results, elections\n"
+            "- Any factual claim about events after mid-2024\n"
+            "- Explicit commands: 'look it up', 'search for it', 'google it', 'check online'\n\n"
+            "QUERY REWRITING RULES:\n"
+            "- The query MUST be fully self-contained — resolve ALL pronouns (it, that, they, "
+            "this, he, she) using conversation history\n"
+            "- Extract only the TOPIC from history, NEVER include previous answers or names "
+            "that were answers to different questions\n"
+            "- Example: user asked 'Who won French Open 2026?' and got 'Alexander Zverev', "
+            "then asks 'Who won it in 2025?' → query='2025 French Open winner' "
+            "(NOT 'Alexander Zverev 2025 French Open winner')\n"
+            "- For 'look it up' commands, rewrite using the LAST USER question as the query, "
+            "not the command itself\n\n"
             f"{context_block}"
             f"User query: {user_text}\n\n"
             "Reply with JSON only — no extra text:\n"
-            '{"search": true or false, "query": "fully self-contained search query using context, '
+            '{"search": true or false, "query": "rewritten self-contained search query, '
             'or empty string if search is false"}'
         )
 
@@ -193,7 +262,7 @@ class LLMProcessor:
         Returns str if stream=False, Generator[str] if stream=True.
         """
         pending_user = {"role": "user", "content": user_input}
-        messages = [self.system_prompt] + self.conversation_history + [pending_user]
+        messages = [self._get_system_prompt()] + self.conversation_history + [pending_user]
 
         if self.provider == "groq" and self.groq_client and not self.groq_rate_limited:
             try:
@@ -287,7 +356,7 @@ class LLMProcessor:
             if not full_response.strip():
                 # No content produced yet — fall back to Ollama
                 logger.warning(f"Groq stream failed ({e}), falling back to Ollama")
-                messages = [self.system_prompt] + self.conversation_history + [pending_user]
+                messages = [self._get_system_prompt()] + self.conversation_history + [pending_user]
                 yield from self._stream_response(
                     self.ollama_client.chat(
                         model=self.settings.OLLAMA_MODEL,
@@ -351,11 +420,21 @@ class LLMProcessor:
                 )
                 self._cap_history()
 
+    def _effective_history_turns(self) -> int:
+        """Fewer history turns when rate-limited to stretch the token budget."""
+        if self.groq_rate_limited:
+            return min(5, self.max_history_turns)
+        return self.max_history_turns
+
     def _cap_history(self):
-        """Trim conversation_history to last N turns (N user + N assistant msgs)."""
-        max_msgs = self.max_history_turns * 2
+        """Trim conversation_history to last N turns, truncate long assistant messages."""
+        max_msgs = self._effective_history_turns() * 2
         if len(self.conversation_history) > max_msgs:
             self.conversation_history = self.conversation_history[-max_msgs:]
+        # Truncate long assistant messages in history to save tokens
+        for msg in self.conversation_history:
+            if msg["role"] == "assistant" and len(msg["content"]) > 200:
+                msg["content"] = msg["content"][:200] + "..."
 
     def generate_streaming_sentences(self, user_input: str):
         """

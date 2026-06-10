@@ -1,0 +1,44 @@
+{
+  "name": "Amar",
+  "location": "Bengaluru",
+  "timezone": "IST",
+  "preferences": {
+    "address_as": "sir",
+    "response_style": "direct, technical, no filler"
+  },
+  "profession": {
+    "title": "Data Engineer",
+    "experience_years": 6,
+    "domain": "Healthcare data pipelines",
+    "expertise": [
+      "AWS Glue, Athena, RDS/PostgreSQL, S3, Airflow",
+      "GCP BigQuery, Cloud Composer",
+      "PySpark, medallion architecture, Iceberg tables"
+    ]
+  },
+  "active_projects": [
+    "JARVIS voice assistant (v2.0) - wake word detection, web search, 1.5s latency",
+    "AWS Glue AI agent for semantic script generation",
+    "Home automation with Home Assistant on Windows"
+  ],
+  "interests": [
+    "System design and tradeoffs",
+    "GenAI and agentic workflows",
+    "Home automation and voice assistants",
+    "Data pipeline optimization"
+  ],
+  "constraints": [
+    "Free tier LLMs only (Groq 100K/day, Tavily 1000/month)",
+    "Must maintain 1.5s latency for first audio",
+    "Local-first with cloud fallback preference",
+    "Windows-based development"
+  ],
+  "communication_notes": [
+    "Prefers direct recommendations, not option lists",
+    "Interested in tradeoffs and constraints",
+    "Appreciates systems thinking approach",
+    "Values pragmatism over perfection"
+  ],
+  "corrections": [],
+  "topics_discussed": []
+}
