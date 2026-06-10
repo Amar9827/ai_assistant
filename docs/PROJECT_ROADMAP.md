@@ -10,7 +10,10 @@
 - [x] Always-on wake word launcher with auto server lifecycle
 - [x] Idle auto-shutdown (2 min timeout)
 - [x] React frontend with audio visualizer
+- [x] Iron Man HUD redesign (arc reactor, grid overlay, scan line, monospace theme)
+- [x] JARVIS system prompt persona
 - [x] Turn infrastructure (cancellable tasks, Stage 2 ready)
+- [x] Root directory organized (docs/, scripts/)
 - [x] 21 passing tests
 
 ---
@@ -32,8 +35,9 @@ High impact, moderate effort. Makes JARVIS significantly smarter.
 - **Approach:** Save/load JSON history file. Auto-trim to MAX_HISTORY_TURNS. Load on startup.
 - **Files:** `src/core/llm.py`, `config/settings.py`
 
-### 1.3 JARVIS System Prompt Persona
+### 1.3 JARVIS System Prompt Persona ✅
 - **Priority:** Medium
+- **Status:** DONE
 - **Description:** Replace generic "helpful voice assistant" prompt with a JARVIS-specific persona — formal British butler, addresses user as "sir", proactive, witty.
 - **Approach:** Dedicated system prompt file or config constant. Tuned for voice output (concise, natural phrasing).
 - **Files:** `src/core/llm.py`
@@ -87,11 +91,13 @@ Medium impact, medium effort. Gives JARVIS hands to interact with the system.
 
 High visual impact. Makes JARVIS look and feel like Iron Man.
 
-### 3.1 Iron Man HUD Redesign
+### 3.1 Iron Man HUD Redesign ✅
 - **Priority:** High
+- **Status:** DONE
 - **Description:** Full UI overhaul with Iron Man aesthetic — dark background, cyan/blue accents, arc reactor animation, holographic elements.
 - **Approach:** CSS overhaul + new React components. Arc reactor as central visualizer. Glass-morphism panels.
 - **Files:** `frontend/src/App.css`, `frontend/src/components/`
+- **Components:** HudOverlay (grid + scan line + corner brackets), HudHeader (arc reactor + clock), ChatPanel (waveform + messages), InputBar (mic + text + controls)
 - **Reference:** [EliseyRotar/jarvis-ai](https://github.com/EliseyRotar/jarvis-ai) — full HUD with arc reactor + thinking stream + task tracker, [novik133/jarvis](https://github.com/novik133/jarvis) — waveform visualizer + holographic UI
 
 ### 3.2 Thinking/Speaking Indicators
@@ -108,8 +114,9 @@ High visual impact. Makes JARVIS look and feel like Iron Man.
 - **Files:** `frontend/src/components/`, `backend/server.py`, `src/core/llm.py`
 - **Reference:** [EliseyRotar/jarvis-ai](https://github.com/EliseyRotar/jarvis-ai) — header model selector
 
-### 3.4 Abort Button
+### 3.4 Abort Button ✅
 - **Priority:** Medium
+- **Status:** DONE
 - **Description:** Cancel button in UI to stop current LLM response and TTS playback immediately.
 - **Approach:** Frontend sends cancel message → backend calls Turn.cancel() → all in-flight tasks stopped.
 - **Files:** `frontend/src/App.jsx`, `backend/server.py`
@@ -212,4 +219,4 @@ Wake Word (openWakeWord) ─► Auto-launch backend + frontend
 
 ---
 
-*Last updated: June 2, 2026*
+*Last updated: June 3, 2026*

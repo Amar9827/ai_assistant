@@ -1,25 +1,33 @@
 export default function StatusBar({ status }) {
-  const statusMessages = {
-    'connected': '✅ Connected',
-    'listening': '🎤 Listening...',
-    'processing': '⚙️ Processing...',
-    'speaking': '🔊 Speaking...',
-    'disconnected': '❌ Disconnected',
-    'error': '⚠️ Error'
+  const labels = {
+    connected: 'READY — AWAITING COMMAND',
+    listening: 'RECORDING — SPEAK NOW',
+    processing: 'PROCESSING — ANALYSING INPUT',
+    speaking: 'RESPONDING — AUDIO PLAYBACK',
+    disconnected: 'OFFLINE — RECONNECTING',
+    error: 'ERROR — CONNECTION LOST',
   };
 
-  const statusColors = {
-    'connected': '#22c55e',
-    'listening': '#06b6d4',
-    'processing': '#eab308',
-    'speaking': '#06b6d4',
-    'disconnected': '#6b7280',
-    'error': '#ef4444'
+  const dotColor = {
+    connected: 'var(--cyan)',
+    listening: 'var(--green)',
+    processing: 'var(--orange)',
+    speaking: 'var(--cyan)',
+    disconnected: 'var(--red)',
+    error: 'var(--red)',
   };
+
+  const active = status === 'listening' || status === 'processing' || status === 'speaking';
 
   return (
-    <div className="status-bar" style={{ color: statusColors[status] }}>
-      {statusMessages[status] || status}
+    <div className="hud-statusbar">
+      <span
+        className={`hud-statusbar-dot ${active ? 'pulse' : ''}`}
+        style={{ background: dotColor[status] || 'var(--cyan-dim)' }}
+      />
+      <span className="hud-statusbar-text">
+        {labels[status] || status?.toUpperCase()}
+      </span>
     </div>
   );
 }

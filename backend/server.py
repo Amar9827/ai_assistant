@@ -20,6 +20,7 @@ import base64
 import tempfile
 from pathlib import Path
 import uuid
+import threading
 from dataclasses import dataclass, field
 from typing import Set
 
@@ -29,6 +30,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from src.core.llm import LLMProcessor
 from src.core.stt import SpeechToText
 from src.core.tts import TextToSpeech
+from src.tools.web_search import search_web, format_search_results_for_llm
 from config.settings import Settings
 
 # ============================================================
@@ -88,7 +90,8 @@ import time as _time
 import os as _os
 import signal as _signal
 
-IDLE_TIMEOUT_SECONDS = 120  # 2 minutes
+# 0 disables idle shutdown. This avoids killing the backend while iterating in UI.
+IDLE_TIMEOUT_SECONDS = int(_os.getenv("IDLE_TIMEOUT_SECONDS", "0"))
 _last_activity_time = _time.time()
 _idle_shutdown_task: asyncio.Task | None = None
 
@@ -103,6 +106,10 @@ async def _idle_shutdown_watcher():
     """Background task: shuts down the server after IDLE_TIMEOUT_SECONDS of no activity."""
     while True:
         await asyncio.sleep(10)  # check every 10s
+        # Never auto-shutdown while a frontend client is connected.
+        if active_websockets:
+            continue
+
         idle_seconds = _time.time() - _last_activity_time
         if idle_seconds >= IDLE_TIMEOUT_SECONDS:
             print(f"[IDLE] No activity for {int(idle_seconds)}s — shutting down")
@@ -165,10 +172,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[WARN] Could not initialize Piper: {e}")
 
-    # Start idle shutdown watcher
+    # Start idle shutdown watcher only when enabled.
     global _idle_shutdown_task
-    _idle_shutdown_task = asyncio.create_task(_idle_shutdown_watcher())
-    print(f"[OK] Idle auto-shutdown enabled ({IDLE_TIMEOUT_SECONDS}s)")
+    if IDLE_TIMEOUT_SECONDS > 0:
+        _idle_shutdown_task = asyncio.create_task(_idle_shutdown_watcher())
+        print(f"[OK] Idle auto-shutdown enabled ({IDLE_TIMEOUT_SECONDS}s)")
+    else:
+        print("[OK] Idle auto-shutdown disabled")
 
     yield
 
@@ -179,6 +189,49 @@ async def lifespan(app: FastAPI):
 
 # Apply lifespan to app
 app.router.lifespan_context = lifespan
+
+
+async def _safe_send_status(websocket: WebSocket, status: str):
+    """Best-effort status sender that ignores closed/disconnected websocket errors."""
+    try:
+        await websocket.send_json({"type": "status", "status": status})
+    except Exception:
+        pass
+
+
+async def _safe_send_json(websocket: WebSocket, payload: dict) -> bool:
+    """Best-effort JSON sender. Returns False if websocket is closed/unavailable."""
+    try:
+        await websocket.send_json(payload)
+        return True
+    except Exception:
+        return False
+
+
+async def _stream_llm_chunks(llm_input: str):
+    """Run blocking LLM streaming on a worker thread so the event loop stays responsive."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[tuple[str, str | None]] = asyncio.Queue()
+
+    def worker():
+        try:
+            for chunk in llm.generate_response(llm_input, stream=True):
+                loop.call_soon_threadsafe(queue.put_nowait, ("chunk", chunk))
+        except Exception as e:
+            loop.call_soon_threadsafe(queue.put_nowait, ("error", str(e)))
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    while True:
+        kind, payload = await queue.get()
+        if kind == "chunk" and payload is not None:
+            yield payload
+        elif kind == "error":
+            raise RuntimeError(payload or "unknown llm streaming error")
+        else:
+            break
 
 
 @app.get("/")
@@ -243,6 +296,7 @@ async def websocket_endpoint(websocket: WebSocket):
     - {"type": "start_listening"} - User clicked "Start Listening"
     - {"type": "stop_listening"} - User clicked "Stop"
     - {"type": "text_query", "text": "..."} - Text input (for testing)
+    - {"type": "cancel_turn"} - User clicked "Abort" to cancel response
 
     Message Types TO frontend:
     - {"type": "status", "status": "connected|listening|processing|speaking"}
@@ -259,6 +313,9 @@ async def websocket_endpoint(websocket: WebSocket):
     active_websockets.add(websocket)
     _touch_activity()
     print(f"[WS] Active connections: {len(active_websockets)}")
+    
+    # Track current turn for cancellation (abort button)
+    current_turn = None
 
     try:
         # Send initial "connected" status
@@ -306,22 +363,42 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif data["type"] == "audio_data":
                 # Receive audio from frontend and transcribe
+                # Spawn as background task so main loop can continue receiving messages (e.g., cancel_turn)
                 _touch_activity()
-                await handle_audio_data(websocket, data)
+                current_turn = Turn()  # Create turn immediately so it's available for cancellation
+                async def process_audio():
+                    try:
+                        await handle_audio_data(websocket, data, current_turn)
+                    except Exception as e:
+                        print(f"[TASK ERROR] audio_data: {e}")
+                        await _safe_send_status(websocket, "connected")
+                asyncio.create_task(process_audio())
 
             elif data["type"] == "text_query":
                 # Handle text-only query (useful for testing)
+                # Spawn as background task so main loop can continue receiving messages (e.g., cancel_turn)
                 _touch_activity()
                 user_text = data.get("text", "")
                 if user_text:
-                    await handle_voice_query(websocket, user_text)
+                    current_turn = Turn()  # Create turn immediately so it's available for cancellation
+                    async def process_query():
+                        try:
+                            await handle_voice_query(websocket, user_text, current_turn)
+                        except Exception as e:
+                            print(f"[TASK ERROR] text_query: {e}")
+                            await _safe_send_status(websocket, "connected")
+                    asyncio.create_task(process_query())
 
             elif data["type"] == "stop_listening":
                 # User stopped recording
-                await websocket.send_json({
-                    "type": "status",
-                    "status": "connected"
-                })
+                await _safe_send_status(websocket, "connected")
+
+            elif data["type"] == "cancel_turn":
+                # User clicked Abort button - cancel current response
+                if current_turn and not current_turn.cancelled:
+                    print(f"[CANCEL] Aborting turn {current_turn.id}")
+                    current_turn.cancel()
+                    await _safe_send_status(websocket, "connected")
 
     except WebSocketDisconnect:
         print("[WS] Frontend disconnected")
@@ -332,6 +409,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "type": "status",
                 "status": "error"
             })
+            await _safe_send_status(websocket, "connected")
         except:
             pass
     finally:
@@ -366,7 +444,7 @@ async def generate_and_stream_audio(websocket: WebSocket, text: str, turn: "Turn
         print(f"[TTS ERROR turn={turn.id}] {e}")
 
 
-async def handle_audio_data(websocket: WebSocket, data: dict):
+async def handle_audio_data(websocket: WebSocket, data: dict, current_turn=None) -> "Turn":
     """
     Handle audio data from frontend - transcribe and process
 
@@ -383,6 +461,8 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
     - We decode it back to binary and save as .webm file
     - Whisper transcribes the audio file
     - Then we process it like a text query
+    
+    Uses or returns the Turn object for the new query.
     """
 
     ALLOWED_FORMATS = {"webm", "wav", "ogg", "mp3"}
@@ -405,13 +485,13 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
                 "type": "status",
                 "status": "error"
             })
-            return
+            return None
 
         # Step 2: Validate size
         audio_base64 = data.get("audio", "")
         if not audio_base64:
             print("[ERROR] No audio data received")
-            return
+            return None
 
         max_bytes = int(settings.MAX_AUDIO_MB) * 1024 * 1024
         if len(audio_base64) * 0.75 > max_bytes:
@@ -420,7 +500,7 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
                 "type": "status",
                 "status": "error"
             })
-            return
+            return None
 
         # Step 3: Decode base64 audio
         audio_bytes = base64.b64decode(audio_base64)
@@ -443,7 +523,7 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
                 "type": "status",
                 "status": "connected"
             })
-            return
+            return None
 
         print(f"[STT] Transcribed: {user_text}")
 
@@ -455,7 +535,7 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
         })
 
         # Step 7: Process transcribed text with LLM
-        await handle_voice_query(websocket, user_text)
+        return await handle_voice_query(websocket, user_text, current_turn)
 
     except Exception as e:
         print(f"[ERROR] Failed to process audio: {e}")
@@ -471,30 +551,61 @@ async def handle_audio_data(websocket: WebSocket, data: dict):
         if tmp_path is not None:
             Path(tmp_path).unlink(missing_ok=True)
             print(f"[AUDIO] Deleted {tmp_path}")
+    
+    return None
 
 
-async def handle_voice_query(websocket: WebSocket, user_text: str):
+async def handle_voice_query(websocket: WebSocket, user_text: str, current_turn=None) -> "Turn":
     """
     Process a query end-to-end. All TTS work runs as tasks on a Turn
     object so Stage 2 can cancel it for barge-in.
+    
+    Uses the provided Turn object, or creates a new one if not provided.
     """
-    turn = Turn()
+    turn = current_turn if current_turn else Turn()
     try:
-        await websocket.send_json({"type": "status", "status": "processing"})
+        if not await _safe_send_json(websocket, {"type": "status", "status": "processing"}):
+            return turn
         print(f"[USER turn={turn.id}] {user_text}")
+
+        # Use a fast LLM classifier to decide whether this query needs a real-time
+        # web search, and to rewrite follow-up queries into self-contained search terms.
+        # Skip entirely when Groq is rate-limited: the router uses Groq, and stuffing
+        # web results into slow Ollama just makes it even slower.
+        llm_input = user_text
+        if settings.TAVILY_API_KEY and not llm.groq_rate_limited:
+            should_search_web, search_query = await llm.classify_and_route(user_text)
+            if should_search_web:
+                try:
+                    web_data = await search_web(search_query, num_results=3, api_key=settings.TAVILY_API_KEY)
+                    if web_data.get("success"):
+                        formatted = format_search_results_for_llm(web_data)
+                        llm_input = (
+                            f"{user_text}\n\n"
+                            "Web search context (recent external data):\n"
+                            f"{formatted}\n\n"
+                            "Use this context when answering. If uncertain, say so briefly."
+                        )
+                        print(f"[WEB turn={turn.id}] search={search_query!r} ({len(web_data.get('results', []))} results)")
+                    else:
+                        print(f"[WEB turn={turn.id}] Search failed: {web_data.get('error', 'unknown error')}")
+                except Exception as e:
+                    print(f"[WEB turn={turn.id}] Search error: {e}")
 
         full_response = ""
         current_sentence = ""
         audio_started = False
 
-        for chunk in llm.generate_response(user_text, stream=True):
+        async for chunk in _stream_llm_chunks(llm_input):
             if turn.cancelled:
                 break
 
             full_response += chunk
             current_sentence += chunk
 
-            await websocket.send_json({"type": "transcript", "text": full_response})
+            if not await _safe_send_json(websocket, {"type": "transcript", "text": full_response}):
+                turn.cancel()
+                break
 
             # Stage 1 keeps the original sentence detection. Stage 2 replaces
             # this entire block with continuous overlapping TTS via SentenceBuffer.
@@ -502,7 +613,9 @@ async def handle_voice_query(websocket: WebSocket, user_text: str):
                 sentence = current_sentence.strip()
                 if sentence:
                     if not audio_started:
-                        await websocket.send_json({"type": "status", "status": "speaking"})
+                        if not await _safe_send_json(websocket, {"type": "status", "status": "speaking"}):
+                            turn.cancel()
+                            break
                         audio_started = True
                     # Spawn TTS as a tracked task; await it immediately for Stage 1.
                     # Stage 2 will let it run concurrently with the next iteration.
@@ -517,7 +630,9 @@ async def handle_voice_query(websocket: WebSocket, user_text: str):
 
         if current_sentence.strip() and not turn.cancelled:
             if not audio_started:
-                await websocket.send_json({"type": "status", "status": "speaking"})
+                if not await _safe_send_json(websocket, {"type": "status", "status": "speaking"}):
+                    turn.cancel()
+                    return turn
             task = turn.spawn(
                 generate_and_stream_audio(websocket, current_sentence.strip(), turn)
             )
@@ -529,21 +644,25 @@ async def handle_voice_query(websocket: WebSocket, user_text: str):
         print(f"[AI turn={turn.id}] {full_response}")
 
         if not turn.cancelled:
-            await websocket.send_json({"type": "response", "response": full_response})
-            await websocket.send_json({"type": "status", "status": "connected"})
+            await _safe_send_json(websocket, {"type": "response", "response": full_response})
+            await _safe_send_json(websocket, {"type": "status", "status": "connected"})
 
     except Exception as e:
         print(f"[ERROR turn={turn.id}] {e}")
         import traceback
         traceback.print_exc()
         try:
-            await websocket.send_json({"type": "status", "status": "error"})
+            await _safe_send_json(websocket, {"type": "status", "status": "error"})
+            await _safe_send_json(websocket, {"type": "response", "response": "I hit a transient error while processing that, sir. Please try again."})
+            await _safe_send_json(websocket, {"type": "status", "status": "connected"})
         except Exception:
             pass
     finally:
         # Ensure no orphan tasks survive the turn.
         turn.cancel()
         await turn.wait_all()
+    
+    return turn
 
 
 if __name__ == "__main__":

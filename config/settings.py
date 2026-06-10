@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
+    # Tavily Web Search API
+    TAVILY_API_KEY: str = ""
+
     # Piper TTS settings
     PIPER_VOICE: str = "en_GB-alan-medium"
     PIPER_SPEAKER: int = 0

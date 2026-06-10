@@ -1,18 +1,21 @@
-# 🎤 Local AI Voice Assistant v2.0
+# 🎤 AI Voice Assistant — J.A.R.V.I.S. v2.0
 
-A fully local AI voice assistant with **real-time streaming**, **wake word detection**, and a modern web UI. Runs entirely on your machine with **no cloud dependencies**. Your conversations stay 100% private!
+A J.A.R.V.I.S.-inspired AI voice assistant with **real-time streaming**, **wake word detection**, **web search**, and a modern web UI. Supports both **cloud (Groq)** and **local (Ollama)** LLMs with automatic fallback.
 
 ## ✨ Features
 
-- 🎙️ **Wake Word Detection**: Activate with "Hey Jarvis" - hands-free operation
-- 🎤 **Speech-to-Text**: OpenAI Whisper (small model, 85% accuracy)
-- 🤖 **Local LLM**: Ollama with streaming responses (Llama 3.2)
-- 🔊 **Text-to-Speech**: Piper TTS with 109 voice options
+- 🎙️ **Wake Word Detection**: Activate with "Hey Jarvis" — hands-free operation
+- 🎤 **Speech-to-Text**: Groq cloud (whisper-large-v3-turbo) with local Whisper fallback
+- 🤖 **Dual LLM Support**: Groq cloud (llama-3.3-70b) primary, Ollama local fallback
+- 🔊 **Text-to-Speech**: Piper TTS with British male voice (JARVIS persona)
+- 🌐 **Web Search**: Tavily-powered real-time search with LLM-based query routing
+- 🧠 **JARVIS Persona**: Iron Man-inspired AI personality — formal, composed, witty
+- ⚡ **Low Latency**: ~1.5s to first audio, concurrent TTS streaming
 - 🌐 **Modern Web UI**: React-based with cyberpunk design
-- ⚡ **Low Latency**: Concurrent TTS streaming (1.5s to first audio)
 - 🎨 **Real-time Visualization**: Live waveform during recording
-- 💬 **Multi-turn Conversations**: Full context awareness
-- 🔒 **100% Private**: All processing happens locally (including wake word)
+- 💬 **Multi-turn Conversations**: Full context awareness with history
+- 🛡️ **Resilient**: Automatic Groq→Ollama fallback, rate limit tracking, non-blocking streaming
+- 🔒 **Security**: CORS lockdown, audio size caps, temp file cleanup
 - 🌍 **Cross-platform**: Windows, Linux, and macOS
 
 ## 🏗️ Architecture
@@ -29,14 +32,23 @@ A fully local AI voice assistant with **real-time streaming**, **wake word detec
 ┌──────────────▼──────────────────────────────┐
 │  FastAPI Backend (Port 8000)                │
 │  - WebSocket server (/ws endpoint)          │
+│  - LLM query router (search vs direct)      │
 │  - Concurrent sentence-by-sentence TTS      │
+│  - Non-blocking LLM streaming (threads)     │
 │  - Wake word trigger API                    │
+│  - Turn-based cancellation                  │
 └──────┬───────┬───────┬───────┬──────────────┘
        │       │       │       │
-   ┌───▼──┐ ┌──▼───┐ ┌▼─────┐ │
-   │Whisper│ │Ollama│ │Piper │ │
-   │ (STT) │ │(LLM) │ │(TTS) │ │
-   └───────┘ └──────┘ └──────┘ │
+   ┌───▼──┐ ┌──▼───┐ ┌▼─────┐ ┌▼──────────┐
+   │Groq  │ │Groq  │ │Piper │ │Tavily     │
+   │Whis- │ │LLM   │ │(TTS) │ │Web Search │
+   │per   │ │  ↓   │ └──────┘ └───────────┘
+   │(STT) │ │Ollama│
+   │  ↓   │ │(fall │
+   │Local │ │back) │
+   │Whis- │ └──────┘
+   │per   │
+   └──────┘
                                 │
        ┌────────────────────────────────────┐
        │ Always-On Wake Word Launcher       │
@@ -45,8 +57,30 @@ A fully local AI voice assistant with **real-time streaming**, **wake word detec
        │ - Pre-trained "hey_jarvis" model   │
        │ - ONNX inference                   │
        │ - Auto-launches servers on detect  │
-       │ - Servers auto-stop after 2m idle  │
+       │ - Port-reuse detection             │
        └────────────────────────────────────┘
+```
+
+### Query Processing Flow
+
+```
+User speaks → STT (Groq/Whisper) → Query Router (fast LLM)
+                                         │
+                               ┌─────────┴──────────┐
+                               │                      │
+                          Needs search?           No search
+                               │                      │
+                         Tavily API              Direct to LLM
+                               │                      │
+                         Rewrite query                 │
+                               │                      │
+                               └──────────┬───────────┘
+                                          │
+                                    LLM (Groq → Ollama fallback)
+                                          │
+                                    Stream response
+                                          │
+                                    Piper TTS → Audio
 ```
 
 ## 🚀 Quick Start
@@ -55,9 +89,18 @@ A fully local AI voice assistant with **real-time streaming**, **wake word detec
 
 - **Python 3.10+** (3.14 recommended)
 - **Node.js 18+** and npm (for frontend)
-- **Ollama** ([Download here](https://ollama.ai))
+- **Ollama** ([Download here](https://ollama.ai)) — local LLM fallback
 - **8GB RAM minimum** (16GB recommended)
 - ~5GB free disk space for models
+
+### API Keys (Optional but Recommended)
+
+| Service | Purpose | Free Tier | Get Key |
+|---------|---------|-----------|---------|
+| **Groq** | Cloud LLM (fast, 70B model) + Cloud STT | 100K tokens/day | [console.groq.com](https://console.groq.com) |
+| **Tavily** | Web search for real-time info | 1000 searches/month | [tavily.com](https://tavily.com) |
+
+Without API keys, the assistant runs fully local using Ollama + local Whisper.
 
 ### Installation
 
@@ -188,15 +231,28 @@ cd frontend && npm run dev
 Edit `.env` file to customize:
 
 ```env
-# Whisper (Speech-to-Text)
+# LLM Provider: "groq" (cloud, recommended) or "ollama" (local only)
+LLM_PROVIDER=groq
+
+# Groq Configuration (cloud LLM — fast inference)
+GROQ_API_KEY=your_groq_api_key_here
+GROQ_MODEL=llama-3.3-70b-versatile
+
+# STT Provider: "groq" (cloud, best accuracy) or "local" (faster-whisper)
+STT_PROVIDER=groq
+
+# Whisper (local STT fallback)
 WHISPER_MODEL=small          # tiny, base, small, medium, large
 WHISPER_DEVICE=auto          # auto, cpu, cuda
 WHISPER_COMPUTE_TYPE=int8    # int8, float16, float32
 
-# Ollama (Language Model)
+# Ollama (local LLM fallback)
 OLLAMA_MODEL=llama3.2:3b     # Or mistral:7b, llama3.1:8b
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_TEMPERATURE=0.7
+
+# Tavily Web Search (for real-time information)
+TAVILY_API_KEY=your_tavily_api_key_here
 
 # Piper TTS (Text-to-Speech)
 PIPER_VOICE=en_GB-alan-medium     # JARVIS-like British male voice
@@ -206,6 +262,20 @@ PIPER_LENGTH_SCALE=0.85            # Slightly faster speech
 # Audio Settings
 SAMPLE_RATE=16000
 ```
+
+### Cloud vs Local Modes
+
+**Cloud Mode (Recommended)** — Set `LLM_PROVIDER=groq` and `STT_PROVIDER=groq`:
+- Uses Groq's llama-3.3-70b for fast, high-quality responses
+- Groq Whisper for accurate transcription
+- Automatic fallback to local Ollama/Whisper on rate limit or failure
+- Web search enabled via Tavily API
+
+**Local Mode** — Set `LLM_PROVIDER=ollama` and `STT_PROVIDER=local`:
+- Fully private, no internet required
+- Uses Ollama (llama3.2:3b) for LLM
+- Uses local faster-whisper for STT
+- No web search capability
 
 ### Wake Word Configuration
 
@@ -263,17 +333,39 @@ OLLAMA_MODEL=mistral:7b
 
 ## 📊 Performance
 
-### Latency Breakdown (16GB RAM, CPU only)
+### Latency Breakdown
 
-| Step | Time | Optimization |
-|------|------|--------------|
-| Voice input | 2-3s | VAD auto-stop |
-| Whisper transcription | 1-2s | Small model, int8 |
-| LLM first sentence | 1-2s | Streaming |
-| TTS per sentence | 0.07s | In-process Piper (25× faster) |
-| Complete response | 5-8s | Depends on length |
+| Step | Groq (Cloud) | Ollama (Local) |
+|------|-------------|----------------|
+| STT transcription | ~0.5s | 1-2s |
+| Query routing | ~0.2s | skipped |
+| Web search (if needed) | ~2.5s | N/A |
+| LLM first token | ~0.3s | 1-2s |
+| TTS per sentence | 0.07s | 0.07s |
+| **Total (no search)** | **~1.5s** | **~3-4s** |
+| **Total (with search)** | **~4s** | **N/A** |
 
 ### Key Optimizations
+
+✅ **Groq Cloud LLM** (llama-3.3-70b-versatile)
+- 70B parameter model via cloud API
+- Automatic fallback to local Ollama on rate limit (100K tokens/day free tier)
+- Rate limit tracking: skips failed Groq calls instead of wasting roundtrips
+
+✅ **LLM-Based Query Routing**
+- Fast classifier (llama-3.1-8b-instant, ~200ms) decides search vs direct answer
+- Context-aware query rewriting: "what about 2025?" → "US Open 2025 winner"
+- Skipped entirely during Groq rate limit (avoids adding latency to Ollama path)
+
+✅ **Web Search via Tavily API**
+- Real-time search results injected into LLM context
+- 3-result summary with AI-generated answer
+- 5-second timeout to prevent blocking
+
+✅ **Non-Blocking LLM Streaming**
+- LLM generation runs on worker thread via `asyncio.Queue`
+- Event loop stays responsive for WebSocket handshakes during slow Ollama fallback
+- No UI freezing even when LLM is generating
 
 ✅ **In-Process Piper TTS**
 - OLD: Subprocess call per sentence (1.794s each)
@@ -284,22 +376,16 @@ OLLAMA_MODEL=mistral:7b
 - Generate audio per sentence → Start playing immediately
 - Audio starts while LLM is still generating text
 
-✅ **Improved Whisper Accuracy**
-- Upgraded to 'small' model (85% accuracy vs 70%)
-- Optimized parameters: beam_size=10, best_of=5
-- VAD filter enabled for silence removal
-
-✅ **Real-time Streaming**
-- Text appears word-by-word (not batched)
-- Audio plays while text still generating
-- No buffering delays
+✅ **Groq Cloud STT** (whisper-large-v3-turbo)
+- Higher accuracy than local small model
+- Automatic fallback to local faster-whisper on failure
 
 ## 📁 Project Structure
 
 ```
 ai-assistant/
 ├── backend/
-│   └── server.py                  # FastAPI WebSocket server (2m idle auto-shutdown)
+│   └── server.py                  # FastAPI WebSocket server (non-blocking streaming)
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx               # Main React component
@@ -313,32 +399,27 @@ ai-assistant/
 │   └── vite.config.js
 ├── src/
 │   ├── core/
-│   │   ├── stt.py                # Whisper integration
-│   │   ├── llm.py                # Ollama integration
-│   │   ├── tts.py                # Piper TTS
+│   │   ├── stt.py                # STT: Groq cloud + local Whisper fallback
+│   │   ├── llm.py                # LLM: Groq + Ollama fallback, query router
+│   │   ├── tts.py                # Piper TTS (in-process)
 │   │   ├── audio_utils.py        # Audio I/O
 │   │   └── assistant.py          # CLI interface (legacy)
+│   ├── tools/
+│   │   └── web_search.py         # Tavily web search integration
 │   └── interfaces/
 │       └── cli.py                # Terminal interface
 ├── config/
-│   └── settings.py               # Configuration management
+│   └── settings.py               # Pydantic settings (.env loader)
 ├── models/
 │   └── piper/                    # TTS voice models
-├── wake_word/
-│   ├── __init__.py
-│   ├── detector.py               # openWakeWord detector class
-│   └── test_detector.py          # Live mic test with score visualization
+├── tests/
+│   ├── test_llm.py
+│   ├── test_tts.py
+│   ├── test_server_security.py
+│   └── test_turn.py
 ├── run_wake_word.py              # Always-on launcher (wake word → servers)
-├── scripts/
-│   ├── start_assistant.bat       # Windows: Start wake word listener
-│   ├── stop_assistant.bat        # Windows: Stop all services
-│   ├── install.bat               # Windows installer
-│   └── install.sh                # Linux/Mac installer
-├── docs/
-│   ├── PROJECT_ROADMAP.md        # 5-phase improvement plan
-│   ├── PROJECT_SUMMARY.md        # Architecture overview
-│   ├── QUICK_START.md            # Quick start guide
-│   └── BASELINE.txt              # Performance baseline data
+├── start_assistant.bat           # Windows: Start wake word listener
+├── stop_assistant.bat            # Windows: Stop all services
 ├── .env                          # Your configuration
 ├── requirements.txt              # Python dependencies
 └── README.md
@@ -402,14 +483,21 @@ python -m wake_word.test_detector
 - [x] Concurrent TTS streaming (low latency)
 - [x] Multi-turn conversation support
 - [x] Voice selection (109 speakers)
-- [x] Improved Whisper accuracy (85%)
 - [x] Wake word detection ("Hey Jarvis")
 - [x] Local wake word processing (no cloud)
 - [x] Auto-start recording on wake word
 - [x] In-process Piper TTS (25× faster, 0.07s/sentence)
 - [x] Cancellable TTS tasks (Turn-based cancellation)
 - [x] Security hardening (CORS lockdown, audio size cap, temp file cleanup)
-- [x] Always-on wake word launcher with idle auto-shutdown
+- [x] Always-on wake word launcher with port-reuse detection
+- [x] Groq cloud LLM integration (llama-3.3-70b-versatile)
+- [x] Groq cloud STT (whisper-large-v3-turbo) with local fallback
+- [x] JARVIS persona system prompt (Iron Man-inspired personality)
+- [x] Web search tool via Tavily API
+- [x] LLM-based query routing (search vs direct answer, context-aware rewriting)
+- [x] Groq rate limit tracking with automatic Ollama fallback
+- [x] Non-blocking LLM streaming (worker threads + asyncio.Queue)
+- [x] Configurable idle auto-shutdown (env-based, client-aware)
 
 ### Planned 📋
 - [ ] JARVIS-style futuristic UI redesign
@@ -436,11 +524,13 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## 🙏 Acknowledgments
 
+- [Groq](https://groq.com) - Ultra-fast cloud LLM and STT inference
+- [Tavily](https://tavily.com) - AI-optimized web search API
 - [OpenAI Whisper](https://github.com/openai/whisper) - Speech recognition
 - [Ollama](https://ollama.ai) - Local LLM hosting
 - [Piper](https://github.com/rhasspy/piper) - Text-to-speech
 - [openWakeWord](https://github.com/dscripka/openWakeWord) - Wake word detection
-- [Faster-Whisper](https://github.com/guillaumekln/faster-whisper) - Optimized inference
+- [Faster-Whisper](https://github.com/guillaumekln/faster-whisper) - Optimized local inference
 - [FastAPI](https://fastapi.tiangolo.com/) - WebSocket backend
 - [React](https://react.dev/) - Modern UI framework
 - [Vite](https://vitejs.dev/) - Fast build tool

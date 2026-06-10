@@ -6,13 +6,15 @@ Listens for "Hey Jarvis" continuously. On detection:
   2. Waits for backend to be ready
   3. Triggers the wake word endpoint so frontend auto-starts recording
 
-Servers auto-shutdown after 2 minutes of idle (no WebSocket clients).
+Idle behavior is controlled by backend configuration.
 Wake word listener keeps running and will relaunch servers on next detection.
 """
 import logging
 import time
 import sys
 import subprocess
+import socket
+import os
 import requests
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from wake_word.detector import OpenWakeWordDetector
 
 PROJECT_ROOT = Path(__file__).parent
 BACKEND_URL = "http://localhost:8000"
+IDLE_TIMEOUT_SECONDS = int(os.getenv("IDLE_TIMEOUT_SECONDS", "0"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +46,13 @@ def _is_backend_running() -> bool:
         return False
 
 
+def _is_port_in_use(host: str = "127.0.0.1", port: int = 8000) -> bool:
+    """Return True when TCP port is already bound by any process."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((host, port)) == 0
+
+
 def _start_backend():
     """Launch backend server as a subprocess."""
     global _backend_proc
@@ -52,6 +62,11 @@ def _start_backend():
 
     if _backend_proc is not None:
         return  # already running
+
+    # Reuse existing backend instance if port is already occupied.
+    if _is_port_in_use(port=8000):
+        print("  [INFO] Port 8000 already in use; reusing existing backend")
+        return
 
     print("  [LAUNCH] Starting backend server...")
     venv_python = PROJECT_ROOT / "venv" / "Scripts" / "python.exe"
@@ -87,6 +102,11 @@ def _wait_for_backend(timeout: float = 15.0) -> bool:
     while time.time() < deadline:
         if _is_backend_running():
             return True
+
+        # If the launched backend exits early (e.g., bind error), fail fast.
+        if _backend_proc and _backend_proc.poll() is not None:
+            return _is_backend_running()
+
         time.sleep(0.5)
     return False
 
@@ -182,7 +202,10 @@ def main():
     print("Wake Word: 'Hey Jarvis'")
     print("Threshold: 0.4")
     print("Debounce: 3.0 seconds")
-    print("Idle Timeout: 2 minutes (servers auto-stop)")
+    if IDLE_TIMEOUT_SECONDS > 0:
+        print(f"Idle Timeout: {IDLE_TIMEOUT_SECONDS} seconds (servers auto-stop)")
+    else:
+        print("Idle Timeout: disabled")
     print("="*60)
     print()
     print("Say 'Hey Jarvis' — servers launch automatically")

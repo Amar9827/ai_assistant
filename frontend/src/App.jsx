@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import './App.css';
-import AudioVisualizer from './components/AudioVisualizer';
-import ConversationPanel from './components/ConversationPanel';
+import HudOverlay from './components/HudOverlay';
+import HudHeader from './components/HudHeader';
 import StatusBar from './components/StatusBar';
+import ChatPanel from './components/ChatPanel';
+import InputBar from './components/InputBar';
 
 export default function App() {
   const [status, setStatus] = useState('disconnected'); // 'listening' | 'processing' | 'speaking' | 'disconnected'
@@ -374,67 +376,41 @@ export default function App() {
     }
   };
 
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter') {
-      sendTextQuery();
+  const handleCancel = () => {
+    /**
+     * Abort current response - cancel TTS and LLM processing
+     * Sends cancel_turn message to backend to stop all in-flight tasks
+     */
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'cancel_turn' }));
+      console.log('[ABORT] Cancelling current turn...');
     }
   };
 
   return (
     <div className="app">
-      <header className="app-header">
-        <h1>🤖 AI Assistant v2.0</h1>
-        <StatusBar status={status} />
-      </header>
-
-      <main className="app-main">
-        <ConversationPanel messages={messages} currentTranscript={transcript} />
-        <AudioVisualizer
-          status={status}
-          transcript={transcript}
-          analyser={analyserRef.current}
-          isListening={isListening}
-        />
-      </main>
-
-      <footer className="app-footer">
-        <div className="text-input-container">
-          <input
-            type="text"
-            value={textInput}
-            onChange={(e) => setTextInput(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder="Type a message to test multi-turn conversation..."
-            disabled={status !== 'connected'}
-            className="text-input"
-          />
-          <button
-            onClick={sendTextQuery}
-            disabled={status !== 'connected' || !textInput.trim()}
-            className="btn btn-send"
-          >
-            Send
-          </button>
-        </div>
-
-        <div className="voice-controls">
-          <button
-            onClick={startListening}
-            disabled={isListening || status !== 'connected'}
-            className="btn btn-primary"
-          >
-            🎤 {isListening ? 'Listening...' : 'Voice (Test)'}
-          </button>
-
-          <button
-            onClick={stopListening}
-            disabled={!isListening}
-            className="btn btn-secondary"
-          >
-            ⏹️ Stop
-          </button>
-        </div>
-      </footer>
+      <HudOverlay />
+      <HudHeader status={status} />
+      <StatusBar status={status} />
+      <ChatPanel
+        messages={messages}
+        currentTranscript={transcript}
+        status={status}
+        analyser={analyserRef.current}
+        isListening={isListening}
+      />
+      <InputBar
+        textInput={textInput}
+        setTextInput={setTextInput}
+        onSend={sendTextQuery}
+        onStartListening={startListening}
+        onStopListening={stopListening}
+        onCancel={handleCancel}
+        onClear={() => { setMessages([]); setTranscript(''); }}
+        isListening={isListening}
+        status={status}
+        disabled={status !== 'connected' && status !== 'listening' && status !== 'processing' && status !== 'speaking'}
+      />
     </div>
   );
 }

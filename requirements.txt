@@ -8,6 +8,9 @@ numpy>=1.24.0                 # Audio processing
 sounddevice>=0.4.6            # Audio I/O (replaces pyaudio)
 scipy>=1.10.0                 # Audio signal processing
 
+# Web/Tool dependencies
+aiohttp>=3.9.0                # Async HTTP for web search (Tavily API)
+
 # Voice Activity Detection (optional - uses simple VAD fallback on Python 3.14+)
 # webrtcvad>=2.0.10           # Uncomment if using Python < 3.14
 
