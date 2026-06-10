@@ -90,8 +90,9 @@ import time as _time
 import os as _os
 import signal as _signal
 
-# 0 disables idle shutdown. This avoids killing the backend while iterating in UI.
-IDLE_TIMEOUT_SECONDS = int(_os.getenv("IDLE_TIMEOUT_SECONDS", "0"))
+# Idle timeout is read from settings after Settings() is constructed.
+# Placeholder; overwritten once settings loads .env.
+_IDLE_TIMEOUT: int = 0
 _last_activity_time = _time.time()
 _idle_shutdown_task: asyncio.Task | None = None
 
@@ -111,7 +112,7 @@ async def _idle_shutdown_watcher():
             continue
 
         idle_seconds = _time.time() - _last_activity_time
-        if idle_seconds >= IDLE_TIMEOUT_SECONDS:
+        if idle_seconds >= _IDLE_TIMEOUT:
             print(f"[IDLE] No activity for {int(idle_seconds)}s — shutting down")
             # Close all WebSocket connections gracefully
             for ws in list(active_websockets):
@@ -128,6 +129,7 @@ _greeting_played = False
 
 # Initialize AI components
 settings = Settings()
+_IDLE_TIMEOUT = settings.IDLE_TIMEOUT_SECONDS
 llm = LLMProcessor(settings)
 stt = SpeechToText(settings)
 tts = TextToSpeech(settings)
@@ -174,9 +176,9 @@ async def lifespan(app: FastAPI):
 
     # Start idle shutdown watcher only when enabled.
     global _idle_shutdown_task
-    if IDLE_TIMEOUT_SECONDS > 0:
+    if _IDLE_TIMEOUT > 0:
         _idle_shutdown_task = asyncio.create_task(_idle_shutdown_watcher())
-        print(f"[OK] Idle auto-shutdown enabled ({IDLE_TIMEOUT_SECONDS}s)")
+        print(f"[OK] Idle auto-shutdown enabled ({_IDLE_TIMEOUT}s)")
     else:
         print("[OK] Idle auto-shutdown disabled")
 

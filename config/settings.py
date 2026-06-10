@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:5173"
     MAX_AUDIO_MB: str = "10"
 
+    # Idle auto-shutdown (seconds, 0 = disabled)
+    IDLE_TIMEOUT_SECONDS: int = 0
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True
